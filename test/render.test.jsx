@@ -80,6 +80,22 @@ function text() {
   return document.getElementById('root').textContent || ''
 }
 
+/**
+ * Waits for the UI to actually say something, rather than assuming a fixed
+ * number of ticks is enough. Boot is async (IndexedDB), so tick-counting is a
+ * race that tightens every time the bundle grows.
+ */
+async function waitForText(pattern, { timeout = 5000 } = {}) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    if (pattern.test(text())) return true
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 25))
+    })
+  }
+  throw new Error(`timed out waiting for ${pattern}\nsaw: ${text().slice(0, 300)}`)
+}
+
 /** Finds the smallest clickable element whose text contains `needle`. */
 function button(needle, { exact = false } = {}) {
   const candidates = [...document.querySelectorAll('button, a, [role="button"]')].filter((el) => {
@@ -176,7 +192,7 @@ test('boots into the inbox with the first-run notes waiting', async () => {
       </React.StrictMode>
     )
   })
-  await flush(6)
+  await waitForText(/Swipe RIGHT to file it/)
 
   assert.match(text(), /Inbox/, 'inbox header')
   assert.match(text(), /Swipe RIGHT to file it/, 'the teaching note is on screen')
@@ -194,6 +210,13 @@ test('the note renders as static text, not a textarea, so swipe can work', async
     'no textarea until the pencil is pressed — that is what kills the gesture'
   )
   assert.ok(button('Fix the words'), 'the pencil toggle is there')
+})
+
+test('a note with no recording says so instead of quietly hiding the player', async () => {
+  // Device test, 2026-08-01: "the play button is missing" was indistinguishable
+  // from "this note never had audio", because the row simply was not rendered.
+  // Absence is now stated out loud.
+  assert.match(text(), /No recording attached to this note/)
 })
 
 test('the pencil toggle opens an editor and saves the corrected words', async () => {
@@ -340,12 +363,25 @@ test('search filters do not crash and can be cleared', async () => {
 
 test('settings renders every group on one screen', async () => {
   await go('#/settings')
-  for (const heading of ['Look', 'Recording', 'On your home screen', 'Backup', 'This app']) {
+  for (const heading of [
+    'Look',
+    'Recording',
+    'Microphone',
+    'On your home screen',
+    'Backup',
+    'This app',
+  ]) {
     assert.match(text(), new RegExp(heading), `${heading} section`)
   }
   assert.match(text(), /Until filed/, 'audio retention is a setting')
   assert.match(text(), /Ask me/)
   assert.match(text(), /Erase everything/)
+})
+
+test('the microphone panel offers permission state and a way to ask for it', async () => {
+  assert.match(text(), /Microphone: /, 'current permission state is shown, not hidden')
+  assert.ok(button('Allow the microphone'), 'asking happens from a real tap')
+  assert.ok(button('Check microphone and speech'), 'the diagnostic is one tap away')
 })
 
 test('switching to paper mode changes the theme immediately', async () => {

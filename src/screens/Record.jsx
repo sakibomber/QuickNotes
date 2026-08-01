@@ -14,8 +14,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from '../lib/router.jsx'
 import { useStore } from '../lib/store.jsx'
-import { Recorder, micErrorMessage, recorderSupported } from '../lib/recorder.js'
-import { getTranscriber } from '../lib/transcribe.js'
+import { Recorder, micErrorMessage, micPermissionState, recorderSupported } from '../lib/recorder.js'
+import { getTranscriber, describeSpeechError } from '../lib/transcribe.js'
+import { isStandalone } from '../lib/diagnostics.js'
 import { clockTime } from '../lib/format.js'
 import Icon from '../components/Icon.jsx'
 import Button from '../components/Button.jsx'
@@ -40,7 +41,8 @@ export default function Record() {
   const [transcript, setTranscript] = useState('')
   const [level, setLevel] = useState(0)
   const [error, setError] = useState(null)
-  const [speechWarning, setSpeechWarning] = useState(false)
+  const [errorName, setErrorName] = useState(null)
+  const [speechError, setSpeechError] = useState(null)
   const [saved, setSaved] = useState(null)
   const [showStamp, setShowStamp] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
@@ -49,6 +51,7 @@ export default function Record() {
   const sessionRef = useRef(null)
   const transcriptRef = useRef('')
   const savingRef = useRef(false)
+  const startingRef = useRef(false)
   const tickRef = useRef(0)
   const wakeLockRef = useRef(null)
   const phaseRef = useRef(phase)
@@ -76,17 +79,47 @@ export default function Record() {
 
   /* ------------------------------------------------------------- start */
 
-  const begin = useCallback(async () => {
+  /**
+   * `fromTap` means we are inside a real user gesture.
+   *
+   * This matters on the installed app: a WebAPK is a separate Android package
+   * with its own runtime microphone permission, and Android will not raise that
+   * prompt outside a user gesture. Autostarting on load in the installed app
+   * therefore failed silently — the whole two-icon design died there. So we
+   * only autostart when the permission is already granted; otherwise the
+   * one-tap screen comes first and the tap is what asks.
+   */
+  const begin = useCallback(async ({ fromTap = false } = {}) => {
     if (phaseRef.current === PHASE.RECORDING) return
+    if (startingRef.current) return
     if (!recorderSupported()) {
       setError('This browser cannot record audio. Try Chrome.')
+      setErrorName('NotSupportedError')
       setPhase(PHASE.ERROR)
       return
     }
 
+    if (!fromTap) {
+      const state = await micPermissionState()
+      if (state !== 'granted' && state !== 'unknown') {
+        // Not ours to take yet. Show the one-tap screen; the tap asks.
+        setPhase(PHASE.READY)
+        setError(
+          state === 'denied'
+            ? isStandalone()
+              ? 'The microphone is blocked for this app. Android Settings → Apps → Quick Notes → Permissions → Microphone → Allow.'
+              : 'The microphone is blocked. Allow it in Chrome’s site settings, then reopen this screen.'
+            : null
+        )
+        return
+      }
+    }
+
+    startingRef.current = true
     setPhase(PHASE.OPENING)
     setError(null)
-    setSpeechWarning(false)
+    setErrorName(null)
+    setSpeechError(null)
     setTranscript('')
     transcriptRef.current = ''
     savingRef.current = false
@@ -103,16 +136,17 @@ export default function Record() {
       await recorder.start()
     } catch (err) {
       recorderRef.current = null
-      // Permission not granted yet, or refused: fall back to the one-tap
-      // full-screen button. The tap is what re-triggers the browser prompt.
-      const name = err?.name || ''
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
-        setError(micErrorMessage(err))
-        setPhase(PHASE.READY)
-      } else {
-        setError(micErrorMessage(err))
-        setPhase(PHASE.ERROR)
-      }
+      startingRef.current = false
+      const name = err?.name || 'UnknownError'
+      setErrorName(name)
+      setError(micErrorMessage(err))
+      // Anything permission-shaped stays on the one-tap screen, because a tap
+      // is exactly what might fix it. Everything else is a hard stop.
+      setPhase(
+        name === 'NotAllowedError' || name === 'SecurityError' || name === 'NotReadableError'
+          ? PHASE.READY
+          : PHASE.ERROR
+      )
       return
     }
 
@@ -130,18 +164,28 @@ export default function Record() {
           onFinal: (text) => {
             transcriptRef.current = text
           },
-          onError: () => setSpeechWarning(true),
+          // Report the real error name. Hiding these is what made
+          // "no words, ever" undiagnosable on the S23.
+          onError: (code, { fatal } = {}) => {
+            if (code === 'no-speech' || code === 'aborted') return
+            setSpeechError({ code, fatal, message: describeSpeechError(code) })
+          },
         })
         sessionRef.current.start()
-      } catch {
+      } catch (e) {
         sessionRef.current = null
-        setSpeechWarning(true)
+        setSpeechError({
+          code: e?.message || 'start-failed',
+          fatal: true,
+          message: describeSpeechError(e?.message),
+        })
       }
     }
 
     acquireWakeLock()
     haptic(18)
     setElapsed(0)
+    startingRef.current = false
     setPhase(PHASE.RECORDING)
   }, [settings.transcriber, settings.liveTranscribe, acquireWakeLock, haptic])
 
@@ -170,11 +214,17 @@ export default function Record() {
     releaseWakeLock()
     setLevel(0)
 
-    // Nothing at all was captured — don't create an empty note.
-    if (!blob && !finalText.trim()) {
+    // Nothing was captured. Never write a note that looks like a successful
+    // save when the capture failed — a note that says nothing, with no audio
+    // behind it, is a lost thought wearing a timestamp.
+    if ((!blob || blob.size === 0) && !finalText.trim()) {
       savingRef.current = false
+      setErrorName('EmptyCapture')
+      setError(
+        'Nothing was recorded — no sound and no words. Nothing has been saved. Tap to try again.'
+      )
       setPhase(PHASE.READY)
-      setError('Nothing was recorded. Tap to try again.')
+      haptic([20, 60, 20])
       return
     }
 
@@ -216,7 +266,18 @@ export default function Record() {
     recorderRef.current?.cancel()
     recorderRef.current = null
     releaseWakeLock()
+    clearInterval(tickRef.current)
     savingRef.current = false
+    startingRef.current = false
+    // Leave RECORDING *before* navigating. Without this the phase stayed
+    // RECORDING with its recorder torn out — a frozen timer and a dead
+    // Stop & Save — which is why Cancel appeared to do nothing on the S23.
+    // It also stops the unmount handler from trying to save a discarded take.
+    setPhase(PHASE.READY)
+    setElapsed(0)
+    setLevel(0)
+    setTranscript('')
+    transcriptRef.current = ''
     showToast('Recording thrown away', { tone: 'danger', ms: 1600 })
     navigate('inbox')
   }, [navigate, releaseWakeLock, showToast])
@@ -308,7 +369,7 @@ export default function Record() {
         elapsed={elapsed}
         level={level}
         transcript={transcript}
-        speechWarning={speechWarning}
+        speechError={speechError}
         transcribing={settings.liveTranscribe}
         onStop={stopAndSave}
         onCancel={() => setConfirmCancel(true)}
@@ -324,8 +385,10 @@ export default function Record() {
     <TapToRecord
       phase={phase}
       error={error}
-      onTap={begin}
+      errorName={errorName}
+      onTap={() => begin({ fromTap: true })}
       onExit={() => navigate('inbox')}
+      onSettings={() => navigate('settings')}
     />
   )
 }
@@ -337,7 +400,7 @@ export default function Record() {
  * This is also the first-run screen, where the tap is what raises Android's
  * microphone prompt — a permission dialog needs something to have been tapped.
  */
-function TapToRecord({ phase, error, onTap, onExit }) {
+function TapToRecord({ phase, error, errorName, onTap, onExit, onSettings }) {
   const opening = phase === PHASE.OPENING
   const fatal = phase === PHASE.ERROR
 
@@ -376,9 +439,17 @@ function TapToRecord({ phase, error, onTap, onExit }) {
             Tap anywhere on this screen and start talking.
           </span>
         )}
+        {errorName && (
+          <span className="font-mono text-[0.72rem] text-faint">{errorName}</span>
+        )}
       </button>
 
-      <div className="safe-b shrink-0 px-4 pb-3">
+      <div className="safe-b shrink-0 space-y-2 px-4 pb-3">
+        {(error || fatal) && (
+          <Button variant="quiet" full icon="settings" onClick={onSettings}>
+            Check the microphone
+          </Button>
+        )}
         <Button variant="quiet" full icon="chevronLeft" onClick={onExit}>
           Back to notes
         </Button>
@@ -393,7 +464,7 @@ function RecordingScreen({
   elapsed,
   level,
   transcript,
-  speechWarning,
+  speechError,
   transcribing,
   onStop,
   onCancel,
@@ -402,12 +473,19 @@ function RecordingScreen({
   onDiscard,
 }) {
   const scrollRef = useRef(null)
+  const [peak, setPeak] = useState(0)
 
   // Keep the newest words in view — this is the reassurance that it's working.
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [transcript])
+
+  // Highest level seen this take. If this stays at zero the mic is open but
+  // deaf, which is a completely different problem from "no words came through".
+  useEffect(() => {
+    setPeak((p) => (level > p ? level : p))
+  }, [level])
 
   const ring = 1 + level * 0.35
 
@@ -441,6 +519,34 @@ function RecordingScreen({
         <div className="mt-5 font-mono text-[clamp(2.75rem,16vw,4.25rem)] leading-none font-bold tabular-nums text-ink">
           {clockTime(elapsed)}
         </div>
+
+        {/* Input level. Proof the microphone is actually hearing something,
+            separate from whether any words come back. */}
+        <div className="mt-4 w-full max-w-xs px-6">
+          <div className="flex items-center gap-2">
+            <Icon name="mic" size={15} className="shrink-0 text-faint" />
+            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-surface2">
+              <div
+                className="h-full rounded-full transition-[width] duration-75"
+                style={{
+                  width: `${Math.round(level * 100)}%`,
+                  background: peak < 0.02 ? 'var(--c-danger)' : 'var(--c-accent)',
+                }}
+              />
+            </div>
+            <span className="w-9 shrink-0 text-right font-mono text-[0.7rem] text-faint">
+              {Math.round(level * 100)}%
+            </span>
+          </div>
+          <p
+            className={[
+              'mt-1.5 text-center text-[0.72rem]',
+              peak < 0.02 ? 'text-danger' : 'text-faint',
+            ].join(' ')}
+          >
+            {peak < 0.02 ? 'No sound reaching the microphone yet' : 'Microphone is hearing you'}
+          </p>
+        </div>
       </div>
 
       <div className="mx-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-surface">
@@ -448,10 +554,10 @@ function RecordingScreen({
           <span className="stamp-label text-[0.68rem] text-faint">
             {transcribing ? 'What I am hearing' : 'Voice only'}
           </span>
-          {speechWarning && (
-            <span className="flex items-center gap-1.5 text-[0.7rem] text-muted">
-              <Icon name="info" size={14} />
-              Text off — voice still saving
+          {speechError && (
+            <span className="flex items-center gap-1.5 font-mono text-[0.68rem] text-danger">
+              <Icon name="warning" size={13} />
+              {speechError.code}
             </span>
           )}
         </div>
@@ -464,6 +570,14 @@ function RecordingScreen({
             </p>
           )}
         </div>
+        {speechError && (
+          <div className="shrink-0 border-t border-linesoft bg-surface2 px-3 py-2">
+            <p className="text-[0.78rem] leading-snug text-muted">
+              <span className="text-danger">Words are not coming through.</span>{' '}
+              {speechError.message} Your voice is still being recorded and saved.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="safe-b shrink-0 px-3 pt-3 pb-3">

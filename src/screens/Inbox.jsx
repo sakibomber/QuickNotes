@@ -638,7 +638,21 @@ function TriageCard({
 
         {/* card foot: audit tools */}
         <div className="shrink-0 space-y-2 border-t border-linesoft px-3 py-2.5">
-          {note.audioBlobId && <AudioPlayer note={note} compact />}
+          {note.audioBlobId ? (
+            <AudioPlayer note={note} compact />
+          ) : (
+            // Say it out loud when there is no recording. Silently omitting the
+            // player made "the play button is missing" indistinguishable from
+            // "this note never had audio" during device testing — and for the
+            // person using it, a note with neither words nor voice is the one
+            // thing that must never look fine.
+            <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface2 px-3 py-2">
+              <Icon name="warning" size={18} className="shrink-0 text-muted" />
+              <span className="text-[0.8rem] leading-snug text-muted">
+                No recording attached to this note.
+              </span>
+            </div>
+          )}
 
           {showKeepToggle && (
             <button

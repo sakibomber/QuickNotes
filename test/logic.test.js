@@ -17,6 +17,7 @@ import {
   DEFAULT_SETTINGS,
 } from '../src/lib/model.js'
 import { clockTime, firstLine, bytes, plural } from '../src/lib/format.js'
+import { describeSpeechError } from '../src/lib/transcribe.js'
 
 /* ------------------------------------------------------------- splitting */
 
@@ -252,6 +253,53 @@ test('a note with no recording is a no-op', () => {
     shouldDropAudio(filed({ audioBlobId: undefined }), { audioRetention: 'until-filed' }, NOW, GRACE),
     false
   )
+})
+
+/* ------------------------------------------- post-device-test defaults */
+
+test('recordings are kept by default while transcription is unproven', () => {
+  // S23 test, 2026-08-01: speech-to-text produced nothing at all, so the
+  // recording is the only copy of the thought. Dropping it on filing is only
+  // safe once the transcript can be trusted.
+  assert.equal(DEFAULT_SETTINGS.audioRetention, 'always')
+})
+
+test('the "always" default means nothing is ever swept', () => {
+  const note = {
+    ...newNote({ transcript: 'a real transcript', bucketId: 'doc' }),
+    audioBlobId: 'aud_1',
+    filedAt: NOW - 999_999,
+  }
+  assert.equal(shouldDropAudio(note, DEFAULT_SETTINGS, NOW, GRACE), false)
+})
+
+/* ------------------------------------------------ speech error reporting */
+
+test('every speech failure gets a sentence a person can act on', () => {
+  for (const code of [
+    'not-allowed',
+    'service-not-allowed',
+    'audio-capture',
+    'network',
+    'no-speech',
+    'aborted',
+    'language-not-supported',
+    'unsupported',
+  ]) {
+    const text = describeSpeechError(code)
+    assert.ok(text && text.length > 15, `${code} needs a real explanation`)
+    assert.ok(/[.!]$/.test(text), `${code} should read as a sentence`)
+  }
+})
+
+test('an unrecognised speech code still reports the raw code', () => {
+  assert.match(describeSpeechError('some-new-code'), /some-new-code/)
+})
+
+test('a silent failure with no code is still described, not blank', () => {
+  const text = describeSpeechError(undefined)
+  assert.ok(text.length > 15)
+  assert.match(text, /no words/i)
 })
 
 /* -------------------------------------------------------------- format */

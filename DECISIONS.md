@@ -127,6 +127,29 @@ The build defaults to relative asset URLs (`base: './'`), which was verified to 
 
 **Trap worth knowing:** on Git Bash for Windows, `BASE_PATH=/QuickNotes/ npm run build` is rewritten by MSYS path conversion into `/Program Files/Git/QuickNotes/` and produces a silently broken bundle. Quote it, prefix with `MSYS_NO_PATHCONV=1`, or use PowerShell. Found while testing the sub-path variant.
 
+## 9. First device test — S23 Ultra, 2026-08-01
+
+Working: capture records real audio, saves, and plays back. The "no text came through, voice saved" fallback displayed correctly.
+
+Four bugs found. Diagnostics were built **before** the speculative fixes, on the principle that a bug you cannot see from the phone is a bug you fix by guessing.
+
+**Diagnostics added**
+- Settings → **Microphone**: live permission state, an **Allow the microphone** button that asks from inside a real tap, and **Check microphone and speech** — a five-step probe (secure context, run mode, permission, mic-alone with peak input level, speech-alone, speech-while-recording) ending in a plain-words verdict, with **Copy this check** to get it off the phone.
+- Record screen: live input-level meter with a percentage and an explicit *"No sound reaching the microphone yet"* state, so "the mic is deaf" is distinguishable from "no words came back".
+- Real error names surfaced everywhere: `getUserMedia` failures show their `DOMException.name`; speech failures show the raw `SpeechRecognition` error code plus a sentence.
+
+**The decisive test** is speech-alone versus speech-while-recording. Web Speech cannot be handed an existing `MediaStream` — the API has no such input — so "one shared stream" is not available. If speech-alone passes and speech-while-recording fails, it is microphone contention and live transcription is not possible on this handset; if both fail, the speech service is simply unavailable. The verdict line says which, in words.
+
+**Bug 2 — installed app could not record.** Cause: a WebAPK is a separate Android package with its own runtime microphone permission, and Android will not raise that prompt outside a user gesture. Autostarting on load could never work there. Fixed: `begin()` now checks the permission first and only autostarts when it is already `granted`; anything else shows the one-tap screen first and the tap is what asks. The fast path Kyle needs is preserved exactly where it can work.
+
+**Bug 3 — no play button on triage cards.** `AudioPlayer` returns `null` only when `audioBlobId` is falsy, so this was a data problem, not a rendering one. The silent omission is what made it undiagnosable. Absence is now stated: *"No recording attached to this note."*
+
+**Bug 4 — Cancel did nothing.** `discard()` tore out the recorder but never left `PHASE.RECORDING`, leaving a recording screen with no recorder: frozen timer, dead Stop & Save. It now sets phase, clears the timer and resets state before navigating, which also stops the unmount handler trying to save a discarded take.
+
+**Default changed: audio retention is now `always`.** With transcription producing nothing, the recording is the only copy of the thought. Reverting to `until-filed` is only correct once the transcript can be trusted.
+
+**Reinforced: never save a capture that failed.** An empty blob *and* an empty transcript no longer creates a note at all — it reports the failure and keeps you on the record screen. A note that says nothing, with no audio behind it, is a lost thought wearing a timestamp.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

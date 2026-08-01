@@ -15,12 +15,13 @@ import { allAsText, copyText, downloadFile, shareFile } from '../lib/text.js'
 import { bytes, plural } from '../lib/format.js'
 import { estimateStorage } from '../lib/db.js'
 import { TRANSCRIBERS, speechSupported } from '../lib/transcribe.js'
-import { recorderSupported, micPermissionState } from '../lib/recorder.js'
+import { recorderSupported } from '../lib/recorder.js'
 import Icon from '../components/Icon.jsx'
 import Button, { Segmented, ToggleRow } from '../components/Button.jsx'
 import { Screen, ScreenHeader, ScreenBody } from '../components/Screen.jsx'
 import Sheet, { ConfirmSheet } from '../components/Sheet.jsx'
 import { StampLabel } from '../components/Stamp.jsx'
+import MicPanel from '../components/MicPanel.jsx'
 import { APP_VERSION } from '../version.js'
 
 export default function Settings() {
@@ -38,7 +39,6 @@ export default function Settings() {
   const { navigate } = useRouter()
 
   const [storage, setStorage] = useState(null)
-  const [micState, setMicState] = useState('unknown')
   const [installPrompt, setInstallPrompt] = useState(null)
   const [installed, setInstalled] = useState(false)
   const [restoreOpen, setRestoreOpen] = useState(false)
@@ -49,7 +49,6 @@ export default function Settings() {
 
   useEffect(() => {
     estimateStorage().then(setStorage)
-    micPermissionState().then(setMicState)
     setInstalled(window.matchMedia?.('(display-mode: standalone)')?.matches || false)
 
     const onPrompt = (e) => {
@@ -234,23 +233,28 @@ export default function Settings() {
               onChange={(v) => setSetting('haptics', v)}
             />
 
+          </Section>
+
+          {/* ------------------------------------------------ microphone */}
+          <Section title="Microphone">
+            <MicPanel onToast={(msg, tone) => showToast(msg, { tone, ms: 2600 })} />
             <StatusRow
               ok={recorderSupported()}
-              label="Microphone"
+              label="Recording"
               value={
-                !recorderSupported()
-                  ? 'Not available in this browser'
-                  : micState === 'granted'
-                    ? 'Allowed'
-                    : micState === 'denied'
-                      ? 'Blocked — turn it on in browser site settings'
-                      : 'Asked when you first record'
+                recorderSupported()
+                  ? 'Supported by this browser'
+                  : 'Not available in this browser — try Chrome'
               }
             />
             <StatusRow
               ok={speechSupported()}
               label="Speech to text"
-              value={speechSupported() ? 'Available on this phone' : 'Not available — voice still records'}
+              value={
+                speechSupported()
+                  ? 'The browser offers it — use the check above to see if it works here'
+                  : 'Not available — your voice still records'
+              }
             />
           </Section>
 

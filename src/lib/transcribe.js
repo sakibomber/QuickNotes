@@ -33,6 +33,30 @@ class NotSupportedError extends Error {
   }
 }
 
+/** Plain-words explanation of a SpeechRecognition error code. */
+export function describeSpeechError(code) {
+  switch (code) {
+    case 'not-allowed':
+      return 'The phone refused the speech service access to the microphone.'
+    case 'service-not-allowed':
+      return 'The phone blocked the speech service itself. On Samsung this often means no speech service is selected, or Google is not the assist app.'
+    case 'audio-capture':
+      return 'The speech service could not take the microphone — usually because the recorder already has it.'
+    case 'network':
+      return 'Speech recognition needs a network connection on this device and could not reach it.'
+    case 'no-speech':
+      return 'No speech was detected.'
+    case 'aborted':
+      return 'Recognition was stopped.'
+    case 'language-not-supported':
+      return 'This phone has no speech pack for the current language.'
+    case 'unsupported':
+      return 'This browser has no speech recognition at all.'
+    default:
+      return code ? `Speech service reported: ${code}` : 'Speech recognition produced no words and no error.'
+  }
+}
+
 /* ------------------------------------------------------- Web Speech adapter */
 
 const SR =
@@ -59,6 +83,9 @@ const webSpeech = {
     let finalText = ''
     let restartTimer = null
     let consecutiveErrors = 0
+    let lastError = null
+    let sawResult = false
+    let starts = 0
 
     const emit = (interim) => {
       onPartial?.(interim ? joinText(finalText, interim) : finalText)
@@ -73,6 +100,7 @@ const webSpeech = {
 
       r.onresult = (event) => {
         consecutiveErrors = 0
+        sawResult = true
         let interim = ''
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i]
@@ -85,15 +113,22 @@ const webSpeech = {
 
       r.onerror = (event) => {
         const err = event.error
-        // 'no-speech' and 'aborted' are normal in a pause — not failures.
-        if (err === 'no-speech' || err === 'aborted') return
-        consecutiveErrors++
-        // 'audio-capture' can mean the recorder and the speech service are
-        // fighting over the mic. Report it, stop retrying forever.
-        if (consecutiveErrors >= 3 || err === 'not-allowed' || err === 'service-not-allowed') {
-          running = false
-          onError?.(err)
+        lastError = err
+        // Every error is reported now, even the benign ones. Swallowing them
+        // is what made "no words, ever" impossible to diagnose on the S23.
+        // 'no-speech' and 'aborted' are normal during a pause, so they are
+        // reported as non-fatal and the restart loop continues.
+        if (err === 'no-speech' || err === 'aborted') {
+          onError?.(err, { fatal: false })
+          return
         }
+        consecutiveErrors++
+        // 'audio-capture' here usually means the recorder and the speech
+        // service are fighting over the microphone.
+        const fatal =
+          consecutiveErrors >= 3 || err === 'not-allowed' || err === 'service-not-allowed'
+        if (fatal) running = false
+        onError?.(err, { fatal })
       }
 
       r.onend = () => {
@@ -119,9 +154,11 @@ const webSpeech = {
         rec = build()
         try {
           rec.start()
+          starts++
         } catch (e) {
           running = false
-          onError?.(e?.message || 'start-failed')
+          lastError = e?.message || 'start-failed'
+          onError?.(lastError, { fatal: true })
         }
       },
       stop() {
@@ -143,7 +180,80 @@ const webSpeech = {
       get text() {
         return finalText.trim()
       },
+      /** What actually happened, for the diagnostics screen. */
+      get status() {
+        return { lastError, sawResult, starts, running }
+      },
     }
+  },
+
+  /**
+   * Runs speech recognition ALONE for a few seconds, with no MediaRecorder
+   * anywhere near the microphone. This is the test that separates "the speech
+   * service is unavailable on this device" from "it cannot share the mic with
+   * the recorder" — the open question after the S23 test.
+   */
+  probe({ ms = 6000 } = {}) {
+    return new Promise((resolve) => {
+      if (!SR) {
+        resolve({ ok: false, reason: 'unsupported', detail: 'No SpeechRecognition in this browser.' })
+        return
+      }
+      const events = []
+      let done = false
+      let heard = ''
+      let r
+      const finish = (ok, reason, detail) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        try {
+          r.onend = null
+          r.stop()
+        } catch {
+          /* already stopped */
+        }
+        resolve({ ok, reason, detail, events, heard: heard.trim() })
+      }
+      try {
+        r = new SR()
+      } catch (e) {
+        resolve({ ok: false, reason: 'construct-failed', detail: String(e?.message || e) })
+        return
+      }
+      r.continuous = true
+      r.interimResults = true
+      r.lang = navigator.language || 'en-US'
+      r.onstart = () => events.push('start')
+      r.onaudiostart = () => events.push('audiostart')
+      r.onsoundstart = () => events.push('soundstart')
+      r.onspeechstart = () => events.push('speechstart')
+      r.onresult = (event) => {
+        events.push('result')
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          heard = joinText(heard, event.results[i][0]?.transcript || '')
+        }
+      }
+      r.onerror = (event) => {
+        events.push(`error:${event.error}`)
+        if (event.error !== 'no-speech' && event.error !== 'aborted') {
+          finish(false, event.error, describeSpeechError(event.error))
+        }
+      }
+      r.onend = () => {
+        events.push('end')
+        finish(!!heard, heard ? 'heard' : 'ended-silent', heard ? '' : 'Ended without returning any words.')
+      }
+      const timer = setTimeout(
+        () => finish(!!heard, heard ? 'heard' : 'timeout', heard ? '' : 'No words in the time allowed.'),
+        ms
+      )
+      try {
+        r.start()
+      } catch (e) {
+        finish(false, 'start-threw', String(e?.message || e))
+      }
+    })
   },
 
   async transcribeBlob() {

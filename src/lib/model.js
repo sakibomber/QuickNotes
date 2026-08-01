@@ -106,8 +106,16 @@ export function defaultBuckets() {
 export const DEFAULT_SETTINGS = {
   theme: 'dark',
   textScale: '1',
-  /** until-filed | always | ask  (spec §3 / §5) */
-  audioRetention: 'until-filed',
+  /**
+   * until-filed | always | ask  (spec §3 / §5)
+   *
+   * Defaults to "always" as of 2026-08-01. Device testing on the S23 found
+   * speech-to-text producing nothing at all, which makes the recording the
+   * only copy of every thought. Dropping audio on filing is correct only when
+   * the transcript is trustworthy; until it is, keeping it is the safe default.
+   * Revisit once transcription is confirmed working. See DECISIONS.md §9.
+   */
+  audioRetention: 'always',
   /** Live Web Speech transcription during capture. Off = audio only. */
   liveTranscribe: true,
   /** Which transcriber the swappable interface uses (spec §4). */
