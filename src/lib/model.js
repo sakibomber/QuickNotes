@@ -128,6 +128,15 @@ export const DEFAULT_SETTINGS = {
    */
   audioProfile: 'processed',
   speechFirst: false,
+  /**
+   * Set when the microphone check has proved this phone cannot run speech
+   * recognition and the recorder at the same time (S23 Ultra: confirmed across
+   * all four profile/order combinations). Live transcription is switched off
+   * rather than left to fail on every capture — a speech session that can never
+   * succeed still costs battery, still shows an error, and on some orderings
+   * measurably degrades the recording itself.
+   */
+  speechBlockedReason: null,
   /** Offer to split a dictated line into separate checklist items (spec §8). */
   splitOnFile: true,
   /** Keep the screen awake while recording so a screen-off doesn't cut capture. */

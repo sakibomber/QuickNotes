@@ -97,10 +97,23 @@ export default function MicPanel({ onToast, onApplyCombination, settings }) {
       setCombos(results)
       const winner = results.find((r) => r.ok)
       if (winner) {
-        onApplyCombination?.({ audioProfile: winner.profile, speechFirst: winner.speechFirst })
+        onApplyCombination?.({
+          audioProfile: winner.profile,
+          speechFirst: winner.speechFirst,
+          speechBlockedReason: null,
+        })
         onToast?.(`Fixed — using "${winner.label}"`, 'good')
       } else {
-        onToast?.('No combination worked on this phone')
+        // Nothing works. Stop attempting a speech session on every capture:
+        // it cannot succeed, it costs battery, and on some orderings it makes
+        // the recording itself worse.
+        onApplyCombination?.({
+          audioProfile: 'processed',
+          speechFirst: false,
+          speechBlockedReason: 'contention',
+          disableLive: true,
+        })
+        onToast?.('Turned off writing-down — this phone cannot do both')
       }
     } finally {
       setSweeping(false)
@@ -226,11 +239,17 @@ export default function MicPanel({ onToast, onApplyCombination, settings }) {
       )}
 
       {sweepDone && !combos.some((c) => c.ok) && (
-        <p className="px-1 text-[0.82rem] leading-relaxed text-muted">
-          None of the four worked. This phone will not let the recorder and the speech service
-          share the microphone. Your voice is still saved with every note, and you can type the
-          words in when you sort your inbox.
-        </p>
+        <div className="rounded-xl border border-line bg-surface2 px-3 py-3">
+          <p className="text-[0.85rem] leading-relaxed text-ink">
+            None of the four worked. This phone will not let the recorder and the speech service
+            share the microphone, whichever way round they are asked.
+          </p>
+          <p className="mt-2 text-[0.82rem] leading-relaxed text-muted">
+            Writing-down has been switched off so it stops trying and failing on every recording.
+            <strong className="text-ink"> Your voice is still saved with every note</strong> — play
+            it back and type the words in when you sort your inbox.
+          </p>
+        </div>
       )}
 
       {rows.length > 0 && !running && (

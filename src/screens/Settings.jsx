@@ -194,10 +194,22 @@ export default function Settings() {
             <ToggleRow
               icon="text"
               label="Write down what I say"
-              hint="Turns speech into text while you record."
+              hint={
+                settings.speechBlockedReason === 'contention'
+                  ? 'This phone cannot do this while recording — checked and confirmed.'
+                  : 'Turns speech into text while you record.'
+              }
               checked={settings.liveTranscribe}
               onChange={(v) => setSetting('liveTranscribe', v)}
             />
+            {settings.speechBlockedReason === 'contention' && (
+              <Hint>
+                The microphone check found this phone will not let the recorder and the speech
+                service run together, so this was switched off to stop it failing on every
+                recording. Your voice is still saved with every note. You can turn it back on to
+                try again after a phone update.
+              </Hint>
+            )}
 
             {engines.length > 1 && settings.liveTranscribe && (
               <div>
@@ -240,9 +252,16 @@ export default function Settings() {
             <MicPanel
               settings={settings}
               onToast={(msg, tone) => showToast(msg, { tone, ms: 2600 })}
-              onApplyCombination={async ({ audioProfile, speechFirst }) => {
+              onApplyCombination={async ({
+                audioProfile,
+                speechFirst,
+                speechBlockedReason = null,
+                disableLive = false,
+              }) => {
                 await setSetting('audioProfile', audioProfile)
                 await setSetting('speechFirst', speechFirst)
+                await setSetting('speechBlockedReason', speechBlockedReason)
+                if (disableLive) await setSetting('liveTranscribe', false)
               }}
             />
             <StatusRow

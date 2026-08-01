@@ -670,13 +670,16 @@ function TriageCard({
             </button>
           )}
 
+          {/* When there is no transcript at all, typing it in IS the task —
+              so the button says so and leads, rather than sitting quiet as a
+              "fix" for words that were never there. */}
           <Button
-            variant={editing ? 'primary' : 'quiet'}
+            variant={editing || !text ? 'primary' : 'quiet'}
             full
             icon={editing ? 'check' : 'pencil'}
             onClick={onToggleEdit}
           >
-            {editing ? 'Done editing' : 'Fix the words'}
+            {editing ? 'Done editing' : text ? 'Fix the words' : 'Type what it says'}
           </Button>
 
           {editing && (

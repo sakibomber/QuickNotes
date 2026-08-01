@@ -173,6 +173,30 @@ Both are now configurable (`audioProfile`, `speechFirst`) and Settings → Micro
 
 If all four fail, the phone genuinely cannot share the microphone and Whisper-after-stop becomes the discussion — with evidence that the cheap options were exhausted first rather than skipped.
 
+## 11. Live transcription ruled out on this handset (2026-08-01)
+
+The sweep came back 0 for 4 on the S23 Ultra:
+
+```
+[FAIL] Cleaned up · recorder first: Recording fine (peak 100%) but no words came back.
+[FAIL] Raw audio · recorder first:  Neither the words nor the recording worked.
+[FAIL] Cleaned up · speech first:   Recording fine (peak 27%) but no words came back.
+[FAIL] Raw audio · speech first:    Neither the words nor the recording worked.
+```
+
+Two things beyond the headline:
+
+- **Raw audio breaks the recording on this device**, not just the transcript. It is not a safe fallback here. This is only visible because a combination has to prove *both* streams survived; a speech-only pass criterion would have called raw a candidate.
+- **Order does not matter.** Speech-first got a 400 ms head start and still heard nothing, while *costing* recorder quality (peak 27% vs 100%). So this is not first-come-first-served: once any `getUserMedia` stream is live in the process, the Android speech service is starved regardless. That closes the axis — there is no ordering or constraint combination left to try.
+
+**Live transcription is therefore impossible on this handset**, and Web Speech cannot be handed an existing `MediaStream` (no such API), so there is no way to feed one stream to both.
+
+**Consequence shipped:** when the sweep finds nothing, live transcription is switched **off** and the reason recorded (`speechBlockedReason: 'contention'`). A speech session that can never succeed still costs battery, still raises an error banner on every capture, and on some orderings measurably degrades the recording. Settings explains why rather than showing a silently-off toggle, and it can be turned back on to retry after a phone update.
+
+**Capture is unaffected.** Spec §1 is about the cost of capture, and capture still works perfectly: tap the icon, talk within ~2 s, audio saved. What is lost is text — which is load-bearing for spec §3 (search over clinical history) and §6 (reading a script down the phone to the doctor), so it is worth solving rather than accepting.
+
+Next decision — transcription engine — is open. See the handover.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype
