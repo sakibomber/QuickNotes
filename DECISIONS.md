@@ -96,13 +96,21 @@ What that **cannot** cover, and therefore has to be checked on the device: micro
 
 ## 8. Deployment
 
-**GitHub Actions building and publishing to Pages on every push to `main`** (`.github/workflows/deploy.yml`), rather than committing a built `dist/` to a `gh-pages` branch. A hand-published branch drifts from source the first time someone is in a hurry; a workflow cannot. `dist/` is gitignored — the repo holds source, CI holds output.
+**The repo stays private. The site is published by uploading the built `dist/` to Netlify, not by GitHub Pages.**
 
-**`npm test` gates the deploy.** A red suite stops the publish. This app goes to people who cannot distinguish a broken build from a bad day, so shipping past failing tests is not a trade worth having.
+GitHub Pages was built and attempted twice (`configure-pages` → `upload-pages-artifact` → `deploy-pages`). Both times the pipeline ran green through install, all 45 tests, and build, and failed at exactly one step — `configure-pages`, with *"Your current plan does not support GitHub Pages for this repository."* Pages requires a public repo or a paid plan. It is a visibility gate, not a content gate.
 
-**`documents/` is untracked** (`git rm --cached` + gitignore, 2026-08-01). It stays on the build machine as the contract, but it is not in the published tree: the spec carries personal medical and cognitive context (TBI, working-memory limits, the VA/clinician framing) and the prototypes carry sample notes about specific symptoms. The built app contains none of it.
+Going public was rejected because of what the repository contains. `documents/quick-notes-spec.md` is the build contract and carries personal medical and cognitive context (TBI, working-memory limits, the VA/clinician framing); the prototypes carry sample notes about specific symptoms. The built app contains none of it — so uploading `dist/` publishes the app without publishing the person.
 
-> **Open exposure — history was deliberately not rewritten.** `documents/` remains in commit `c382fed` and is fully readable there (`git show c382fed:documents/quick-notes-spec.md`, or GitHub's tree view at that commit). Untracking changes what is in `HEAD`, not what is in the repository. That is a sound position while the repo is **private**; it stops being one the moment the repo is made public, which is what GitHub Pages requires on a free plan. Resolving that needs an explicit decision: scrub history, accept the exposure, or publish the built app somewhere that does not require a public repo. Recorded here so the trade is not lost.
+**`documents/` is untracked** (`git rm --cached` + gitignore, 2026-08-01) so it is out of `HEAD` going forward. It stays on the build machine as the contract.
+
+> **Known and accepted:** history was deliberately not rewritten, so `documents/` is still readable at commit `c382fed` (`git show c382fed:documents/quick-notes-spec.md`, or GitHub's tree view). Untracking changes what is in `HEAD`, not what is in the repository. This is sound **only while the repo is private**, which is now a load-bearing condition rather than an incidental one. If this repo is ever made public, scrub history first.
+
+**CI runs on every push** (`.github/workflows/ci.yml`): full suite, then build, then `dist/` attached to the run as a downloadable artifact. So whatever gets uploaded is always a build that passed its tests, and there is no "did I remember to build?" step.
+
+**`npm test` gates the artifact.** A red suite produces nothing to upload. This app goes to people who cannot distinguish a broken build from a bad day, so shipping past failing tests is not a trade worth having.
+
+`dist/` is gitignored — the repo holds source, CI holds output.
 
 **No `BASE_PATH` is set, deliberately — this is a deviation from the instruction to build with `BASE_PATH=/QuickNotes/`.**
 The build defaults to relative asset URLs (`base: './'`), which was verified to serve correctly both from a domain root and from the exact `/QuickNotes/` sub-path — HTML, CSS, JS, `sw.js`, the workbox chunk, all seven icons, and the manifest's `start_url`, `scope`, shortcut URL and shortcut icon all resolve. Reasons to prefer it over an absolute base:

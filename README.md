@@ -20,13 +20,13 @@ npm run preview  # serve the production build
 
 ## Deploying
 
-The repo is private (it holds the spec, which carries personal medical context), so
-GitHub Pages is not used — Pages needs a public repo or a paid plan. The site is
-published by uploading the built `dist/`. The app contains none of the personal
-material; the repo does.
+The repo is private — it holds the spec, which carries personal medical context — so
+GitHub Pages is not used: Pages needs a public repo or a paid plan. The site is published
+by uploading the built `dist/`. The app contains none of the personal material; the repo
+does. (See DECISIONS.md §8 — the private setting is load-bearing, not incidental.)
 
-Every push runs `.github/workflows/ci.yml`: full test suite, then build, then `dist/`
-is attached to the run as a downloadable artifact. So you can deploy without building
+Every push runs `.github/workflows/ci.yml`: full test suite, then build, then `dist/` is
+attached to the run as a downloadable artifact. So you can deploy without building
 locally — grab the artifact from the Actions tab and upload it.
 
 **To publish or update the site:**
@@ -34,19 +34,12 @@ locally — grab the artifact from the Actions tab and upload it.
 1. Get a `dist/` — either `npm run build` locally, or download the `quick-notes-dist`
    artifact from the newest green run in the repo's **Actions** tab.
 2. Drag the folder (or `quick-notes-dist.zip`) onto <https://app.netlify.com/drop>.
-3. Netlify returns an HTTPS URL. That URL is the thing you send people.
+3. Netlify returns an HTTPS URL. Rename it under **Site configuration → Change site name**
+   to something you can say out loud. That URL is what you send people.
 
 The build uses relative asset URLs, so the same `dist/` works from a domain root *and*
 from a sub-path — no `BASE_PATH` needed, and nothing breaks if it moves hosts later.
 Verified against both layouts.
-
-If a host ever does need an absolute prefix, `BASE_PATH` still works — but on Git Bash for
-Windows quote it, or MSYS rewrites `/QuickNotes/` into `/Program Files/Git/QuickNotes/`
-and produces a silently broken bundle:
-
-```bash
-MSYS_NO_PATHCONV=1 BASE_PATH=/QuickNotes/ npm run build   # Git Bash
-```
 
 ## Testing on the S23 Ultra
 
