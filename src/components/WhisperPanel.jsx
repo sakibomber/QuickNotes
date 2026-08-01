@@ -27,6 +27,7 @@ export default function WhisperPanel({ onToast }) {
   const [bench, setBench] = useState(null)
   const [benching, setBenching] = useState(false)
   const [wasm, setWasm] = useState(null)
+  const [errorText, setErrorText] = useState(null)
 
   useEffect(() => {
     hasWebGPU().then(setGpu)
@@ -39,16 +40,22 @@ export default function WhisperPanel({ onToast }) {
 
   const download = async () => {
     setLoading(true)
+    setErrorText(null)
     setProgress({ phase: 'starting' })
     try {
       await loadWhisper(settings.whisperModel, { onProgress: setProgress })
+      // Clear it explicitly. The library does not reliably emit a final
+      // "ready", so waiting for one left a full bar reading "Downloading…"
+      // forever — which looks exactly like a hang.
+      setProgress(null)
       setWasm(await wasmSource())
       setReady(true)
       await setSetting('whisperEnabled', true)
       onToast?.('Ready — your notes will be written up automatically', 'good')
       runTranscriptionQueue()
     } catch (err) {
-      onToast?.(`Download failed: ${err?.message || err}`)
+      setErrorText(String(err?.message || err))
+      onToast?.('Download failed')
       setProgress(null)
     } finally {
       setLoading(false)
@@ -133,6 +140,15 @@ export default function WhisperPanel({ onToast }) {
               <div className="h-full rounded-full bg-accent" style={{ width: `${progress.pct}%` }} />
             </div>
           )}
+        </div>
+      )}
+
+      {errorText && (
+        <div className="rounded-xl border border-danger px-3 py-2.5">
+          <p className="text-[0.85rem] leading-snug text-danger">It could not start.</p>
+          <p className="mt-1 font-mono text-[0.72rem] leading-snug break-words text-muted">
+            {errorText}
+          </p>
         </div>
       )}
 

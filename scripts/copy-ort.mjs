@@ -21,7 +21,19 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const from = join(root, 'node_modules', 'onnxruntime-web', 'dist')
 const to = join(root, 'public', 'ort')
 
-const WANTED = ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.jsep.wasm']
+/**
+ * BOTH halves are required. ORT fetches a `.mjs` loader from `wasmPaths` and
+ * that loader instantiates the matching `.wasm`. Shipping only the binaries
+ * gives a 404 on the loader and ORT reports "no available backend found",
+ * which does not point at the missing file at all. Verified on the live site:
+ * the .wasm returned 200 and the .mjs returned 404.
+ */
+const WANTED = [
+  'ort-wasm-simd-threaded.mjs',
+  'ort-wasm-simd-threaded.wasm',
+  'ort-wasm-simd-threaded.jsep.mjs',
+  'ort-wasm-simd-threaded.jsep.wasm',
+]
 
 if (!existsSync(from)) {
   console.error('onnxruntime-web not installed — run npm install first')
