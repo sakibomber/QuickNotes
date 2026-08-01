@@ -112,6 +112,10 @@ Going public was rejected because of what the repository contains. `documents/qu
 
 `dist/` is gitignored — the repo holds source, CI holds output.
 
+**Settled 2026-08-01: GitHub Pages deployment abandoned.** It requires a public repo (or a paid plan), and this repo stays private because its history still contains `documents/`. Deploys are manual: drag the built `dist/` onto Netlify Drop. The cost of that choice is one drag per release instead of push-to-deploy.
+
+**Revisit trigger:** if the release cadence ever makes the manual drag the thing that stops a fix reaching the phone, GitHub Pro (~$4/mo) enables Pages on private repos and restores push-to-deploy without publishing anything. The workflow to do it is in the history at `7169b97` (`.github/workflows/deploy.yml`) — restoring it is a `git show` away, and the Pages site visibility would need setting to public so recipients can reach it. Not worth $4/mo for a v1 that ships occasionally; worth reconsidering the first time it is annoying.
+
 **No `BASE_PATH` is set, deliberately — this is a deviation from the instruction to build with `BASE_PATH=/QuickNotes/`.**
 The build defaults to relative asset URLs (`base: './'`), which was verified to serve correctly both from a domain root and from the exact `/QuickNotes/` sub-path — HTML, CSS, JS, `sw.js`, the workbox chunk, all seven icons, and the manifest's `start_url`, `scope`, shortcut URL and shortcut icon all resolve. Reasons to prefer it over an absolute base:
 
