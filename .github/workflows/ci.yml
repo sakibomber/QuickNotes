@@ -1,0 +1,55 @@
+name: Build and test
+
+# GitHub Pages is not used: this repo is private (it holds the spec, which
+# carries personal medical context) and Pages needs a public repo or a paid
+# plan. The site is published by dragging the built dist/ onto Netlify Drop.
+# See DECISIONS.md §8.
+#
+# So this workflow's job is to guarantee that what you upload is sound: it runs
+# the full suite on every push, then attaches a ready-to-upload dist/ to the run
+# so you never have to build on the laptop before deploying.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # The gate. This app goes to people who cannot tell a broken build from a
+      # bad day, so a red suite must never become a deployable artifact.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        # No BASE_PATH: the build uses relative asset URLs, so the same output
+        # works from a domain root (Netlify) and from a sub-path. See
+        # DECISIONS.md §8.
+        run: npm run build
+
+      - name: Upload site
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-notes-dist
+          path: dist
+          if-no-files-found: error

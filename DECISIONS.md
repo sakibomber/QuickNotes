@@ -96,9 +96,17 @@ What that **cannot** cover, and therefore has to be checked on the device: micro
 
 ## 8. Deployment
 
-**GitHub Actions building on every push to `main`**, rather than committing a built `dist/` to a `gh-pages` branch. A hand-published branch drifts from source the first time someone is in a hurry; a workflow cannot. `dist/` is gitignored for the same reason — the repo holds source, CI holds output.
+**The repo stays private and the site is published by uploading `dist/`, not by GitHub Pages.**
 
-**`npm test` gates the deploy.** A red suite stops the publish. This app goes to people who cannot distinguish a broken build from a bad day, so shipping past failing tests is not a trade worth having.
+GitHub Pages was set up first (`configure-pages` → `upload-pages-artifact` → `deploy-pages`) and the pipeline worked end to end — install, all 45 tests, build — failing only at `configure-pages` with *"Your current plan does not support GitHub Pages for this repository."* Pages needs a public repo or a paid plan.
+
+Making the repo public was rejected, deliberately: `documents/quick-notes-spec.md` is the build contract and therefore committed, and it carries personal medical and cognitive context (TBI, working-memory limits, the VA/clinician framing), while the prototypes carry sample notes about specific symptoms. The built app contains none of that, so uploading `dist/` publishes the app without publishing the person. That asymmetry is the whole reason for the split.
+
+**CI still runs on every push** (`.github/workflows/ci.yml`): full suite, then build, then `dist/` attached to the run as a downloadable artifact. So the thing that gets uploaded is always one that passed its tests, and there is no "did I remember to build?" step on the laptop.
+
+**`npm test` gates the artifact.** A red suite produces nothing to upload. This app goes to people who cannot distinguish a broken build from a bad day, so shipping past failing tests is not a trade worth having.
+
+`dist/` is gitignored throughout — the repo holds source, CI holds output.
 
 **No `BASE_PATH` is set, deliberately — this is a deviation from the instruction to build with `BASE_PATH=/QuickNotes/`.**
 The build defaults to relative asset URLs (`base: './'`), which was verified to serve correctly both from a domain root and from the exact `/QuickNotes/` sub-path — HTML, CSS, JS, `sw.js`, the workbox chunk, all seven icons, and the manifest's `start_url`, `scope`, shortcut URL and shortcut icon all resolve. Reasons to prefer it over an absolute base:
