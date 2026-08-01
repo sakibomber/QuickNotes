@@ -120,6 +120,14 @@ export const DEFAULT_SETTINGS = {
   liveTranscribe: true,
   /** Which transcriber the swappable interface uses (spec §4). */
   transcriber: 'webspeech',
+  /**
+   * How the microphone is opened, and who gets it first. Defaults match what
+   * has always shipped; Settings → Microphone can find a combination that lets
+   * the recorder and the speech service share the mic on phones where the
+   * default cannot (see DECISIONS.md §9).
+   */
+  audioProfile: 'processed',
+  speechFirst: false,
   /** Offer to split a dictated line into separate checklist items (spec §8). */
   splitOnFile: true,
   /** Keep the screen awake while recording so a screen-off doesn't cut capture. */

@@ -237,7 +237,14 @@ export default function Settings() {
 
           {/* ------------------------------------------------ microphone */}
           <Section title="Microphone">
-            <MicPanel onToast={(msg, tone) => showToast(msg, { tone, ms: 2600 })} />
+            <MicPanel
+              settings={settings}
+              onToast={(msg, tone) => showToast(msg, { tone, ms: 2600 })}
+              onApplyCombination={async ({ audioProfile, speechFirst }) => {
+                await setSetting('audioProfile', audioProfile)
+                await setSetting('speechFirst', speechFirst)
+              }}
+            />
             <StatusRow
               ok={recorderSupported()}
               label="Recording"

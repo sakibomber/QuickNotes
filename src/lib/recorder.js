@@ -41,10 +41,37 @@ export async function micPermissionState() {
   }
 }
 
+/**
+ * Audio constraint profiles.
+ *
+ * On Android, asking for echo cancellation makes Chrome open the
+ * VOICE_COMMUNICATION audio source, which engages the hardware AEC path and
+ * tends to be exclusive — so the speech service, arriving second, gets handed
+ * a silent stream. Requesting raw audio often opens a shareable source instead.
+ * This is the difference the S23 contention hinges on, so it is a setting.
+ */
+export const AUDIO_PROFILES = {
+  processed: {
+    id: 'processed',
+    label: 'Cleaned up',
+    constraints: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  },
+  raw: {
+    id: 'raw',
+    label: 'Raw',
+    constraints: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+  },
+}
+
+export function profileConstraints(id) {
+  return (AUDIO_PROFILES[id] || AUDIO_PROFILES.processed).constraints
+}
+
 export class Recorder {
-  constructor({ onLevel, onError } = {}) {
+  constructor({ onLevel, onError, audioProfile = 'processed' } = {}) {
     this.onLevel = onLevel
     this.onError = onError
+    this.audioProfile = audioProfile
     this.stream = null
     this.recorder = null
     this.chunks = []
@@ -81,11 +108,7 @@ export class Recorder {
     }
 
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+      audio: profileConstraints(this.audioProfile),
     })
 
     this.mimeType = pickMimeType()

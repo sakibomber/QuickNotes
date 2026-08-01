@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
+  findMicCombination,
   isSecure,
   isStandalone,
   requestMicAccess,
@@ -40,11 +41,20 @@ const STATE_COPY = {
   },
 }
 
-export default function MicPanel({ onToast }) {
+export default function MicPanel({ onToast, onApplyCombination, settings }) {
   const [state, setState] = useState('unknown')
   const [rows, setRows] = useState([])
   const [running, setRunning] = useState(false)
   const [asked, setAsked] = useState(null)
+  const [combos, setCombos] = useState([])
+  const [sweeping, setSweeping] = useState(false)
+  const [sweepDone, setSweepDone] = useState(false)
+
+  // Offered once the main check has proved speech works alone but not while
+  // recording — the only situation where a different combination can help.
+  const contention =
+    rows.some((r) => r.id === 'speech-alone' && r.ok) &&
+    rows.some((r) => r.id === 'speech-with-recorder' && !r.ok)
 
   const refresh = useCallback(() => {
     micPermissionState().then(setState)
@@ -76,6 +86,28 @@ export default function MicPanel({ onToast }) {
     }
   }
 
+  const sweep = async () => {
+    setSweeping(true)
+    setSweepDone(false)
+    setCombos([])
+    try {
+      const results = await findMicCombination({
+        onStep: (_row, all) => setCombos(all),
+      })
+      setCombos(results)
+      const winner = results.find((r) => r.ok)
+      if (winner) {
+        onApplyCombination?.({ audioProfile: winner.profile, speechFirst: winner.speechFirst })
+        onToast?.(`Fixed — using "${winner.label}"`, 'good')
+      } else {
+        onToast?.('No combination worked on this phone')
+      }
+    } finally {
+      setSweeping(false)
+      setSweepDone(true)
+    }
+  }
+
   const copyReport = async () => {
     const lines = [
       'Quick Notes — microphone check',
@@ -83,9 +115,13 @@ export default function MicPanel({ onToast }) {
       `Running as: ${isStandalone() ? 'installed app' : 'browser tab'}`,
       `Secure context: ${isSecure()}`,
       `Permission: ${state}`,
+      `Audio profile: ${settings?.audioProfile || 'processed'} · speech first: ${!!settings?.speechFirst}`,
       navigator.userAgent,
       '',
       ...rows.map((r) => `[${r.ok ? 'PASS' : r.warn || r.neutral ? 'INFO' : 'FAIL'}] ${r.label}: ${r.detail}`),
+      ...(combos.length
+        ? ['', 'Combination sweep:', ...combos.map((c) => `[${c.ok ? 'PASS' : 'FAIL'}] ${c.label}: ${c.detail}`)]
+        : []),
     ]
     const ok = await copyText(lines.join('\n'))
     onToast?.(ok ? 'Check copied — paste it anywhere' : 'Could not copy', ok ? 'good' : undefined)
@@ -151,6 +187,50 @@ export default function MicPanel({ onToast }) {
             </li>
           ))}
         </ul>
+      )}
+
+      {contention && !running && (
+        <div className="space-y-2.5 rounded-xl border border-accent px-3 py-3">
+          <p className="text-[0.85rem] leading-snug text-ink">
+            Speech works on its own but not while recording. There are four ways to open the
+            microphone — this tries each one and keeps the first that works.
+          </p>
+          <p className="text-[0.8rem] leading-snug text-muted">
+            <strong className="text-ink">Keep talking the whole time.</strong> It takes about half
+            a minute. Silence looks exactly like failure.
+          </p>
+          <Button variant="primary" full icon="restart" onClick={sweep} disabled={sweeping}>
+            {sweeping ? 'Trying…' : 'Find a way that works'}
+          </Button>
+        </div>
+      )}
+
+      {combos.length > 0 && (
+        <ul className="space-y-1.5 rounded-xl border border-line bg-surface2 px-3 py-3">
+          {combos.map((c) => (
+            <li key={c.id} className="flex gap-2.5">
+              <Icon
+                name={c.ok ? 'check' : 'close'}
+                size={16}
+                className={['mt-0.5 shrink-0', c.ok ? 'text-accent' : 'text-danger'].join(' ')}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[0.85rem] text-ink">{c.label}</span>
+                <span className="block text-[0.78rem] leading-snug break-words text-muted">
+                  {c.detail}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {sweepDone && !combos.some((c) => c.ok) && (
+        <p className="px-1 text-[0.82rem] leading-relaxed text-muted">
+          None of the four worked. This phone will not let the recorder and the speech service
+          share the microphone. Your voice is still saved with every note, and you can type the
+          words in when you sort your inbox.
+        </p>
       )}
 
       {rows.length > 0 && !running && (

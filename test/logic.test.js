@@ -18,6 +18,8 @@ import {
 } from '../src/lib/model.js'
 import { clockTime, firstLine, bytes, plural } from '../src/lib/format.js'
 import { describeSpeechError } from '../src/lib/transcribe.js'
+import { profileConstraints } from '../src/lib/recorder.js'
+import { COMBINATIONS } from '../src/lib/diagnostics.js'
 
 /* ------------------------------------------------------------- splitting */
 
@@ -300,6 +302,36 @@ test('a silent failure with no code is still described, not blank', () => {
   const text = describeSpeechError(undefined)
   assert.ok(text.length > 15)
   assert.match(text, /no words/i)
+})
+
+/* --------------------------------------------------- audio profiles */
+
+test('the raw profile turns off every processing constraint', () => {
+  // On Android, asking for echo cancellation opens VOICE_COMMUNICATION, which
+  // tends to be exclusive and hands the speech service a silent stream.
+  const raw = profileConstraints('raw')
+  assert.equal(raw.echoCancellation, false)
+  assert.equal(raw.noiseSuppression, false)
+  assert.equal(raw.autoGainControl, false)
+})
+
+test('the default profile keeps the processing that makes recordings listenable', () => {
+  const processed = profileConstraints('processed')
+  assert.equal(processed.echoCancellation, true)
+  assert.equal(profileConstraints(undefined).echoCancellation, true, 'unknown ids fall back safely')
+  assert.equal(DEFAULT_SETTINGS.audioProfile, 'processed')
+  assert.equal(DEFAULT_SETTINGS.speechFirst, false)
+})
+
+test('the sweep covers both variables, both ways', () => {
+  assert.equal(COMBINATIONS.length, 4)
+  const ids = COMBINATIONS.map((c) => `${c.profile}:${c.speechFirst}`)
+  assert.deepEqual(
+    [...ids].sort(),
+    ['processed:false', 'processed:true', 'raw:false', 'raw:true'].sort()
+  )
+  assert.equal(COMBINATIONS[0].profile, 'processed')
+  assert.equal(COMBINATIONS[0].speechFirst, false, 'the shipped default is tried first')
 })
 
 /* -------------------------------------------------------------- format */

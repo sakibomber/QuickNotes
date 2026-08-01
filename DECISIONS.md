@@ -150,6 +150,29 @@ Four bugs found. Diagnostics were built **before** the speculative fixes, on the
 
 **Reinforced: never save a capture that failed.** An empty blob *and* an empty transcript no longer creates a note at all — it reports the failure and keeps you on the record screen. A note that says nothing, with no audio behind it, is a lost thought wearing a timestamp.
 
+## 10. Mic contention confirmed — the combination sweep (2026-08-01)
+
+The diagnostic came back decisive on the S23 Ultra, installed app:
+
+```
+[PASS] Microphone alone:      22 KB · peak level 100%
+[PASS] Speech to text alone:  Heard: "check"
+[FAIL] Speech while recording: ended-silent · events: start, audiostart, end
+```
+
+The event list is the finding. `audiostart` fired but **`soundstart` never did** — Android handed the speech service an audio source and it contained silence. That is contention, not a dead speech service, and not a bug in the wiring.
+
+**Before accepting Whisper as the answer**, two variables in our own code were identified as prime suspects:
+
+1. **Audio constraints.** We requested `echoCancellation / noiseSuppression / autoGainControl: true`. On Android that makes Chrome open the **VOICE_COMMUNICATION** audio source, which engages the hardware AEC path and tends to be exclusive. Raw audio often opens a shareable source instead.
+2. **Start order.** The recorder called `getUserMedia` first and the speech service arrived second — the loser was whoever asked last.
+
+Both are now configurable (`audioProfile`, `speechFirst`) and Settings → Microphone offers **Find a way that works**: a sweep of all four combinations, stopping at the first that passes, saving it, and using it for every capture afterwards.
+
+**A combination only passes if BOTH survive** — the speech service returned words *and* the recording still has signal. A transcript sitting on top of a silent recording is the worst available outcome: it destroys the audit trail that spec §5 exists to protect, and it would look like success. The sweep reports that case explicitly as "heard the words BUT the recording came out silent — unusable".
+
+If all four fail, the phone genuinely cannot share the microphone and Whisper-after-stop becomes the discussion — with evidence that the cheap options were exhausted first rather than skipped.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

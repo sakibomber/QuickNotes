@@ -204,6 +204,108 @@ export async function runDiagnostics({ onStep } = {}) {
   return results
 }
 
+/* ------------------------------------------------------------------------ */
+
+/**
+ * COMBINATION SWEEP — run when speech works alone but not while recording.
+ *
+ * Two variables decide whether Android will let the recorder and the speech
+ * service share the microphone:
+ *
+ *   audio profile — asking for echo cancellation opens the VOICE_COMMUNICATION
+ *                   source, which tends to be exclusive. Raw audio often opens
+ *                   a shareable one.
+ *   start order   — whoever grabs the microphone first can win it outright.
+ *
+ * A combination only passes if BOTH survive: the speech service returned words
+ * AND the recording still has signal. A "working" transcript on top of a silent
+ * recording is the worst outcome available — it destroys the audit trail that
+ * spec §5 exists to protect, and it would look like success.
+ */
+export const COMBINATIONS = [
+  { id: 'processed-recorder-first', profile: 'processed', speechFirst: false, label: 'Cleaned up · recorder first' },
+  { id: 'raw-recorder-first', profile: 'raw', speechFirst: false, label: 'Raw audio · recorder first' },
+  { id: 'processed-speech-first', profile: 'processed', speechFirst: true, label: 'Cleaned up · speech first' },
+  { id: 'raw-speech-first', profile: 'raw', speechFirst: true, label: 'Raw audio · speech first' },
+]
+
+async function tryCombination({ profile, speechFirst }, ms = 6000) {
+  let peak = 0
+  const recorder = new Recorder({
+    audioProfile: profile,
+    onLevel: (v) => {
+      if (v > peak) peak = v
+    },
+  })
+
+  let speech
+  try {
+    if (speechFirst) {
+      const probe = webSpeech.probe({ ms })
+      // Let the speech service take the microphone before the recorder asks.
+      await new Promise((r) => setTimeout(r, 400))
+      await recorder.start()
+      speech = await probe
+    } else {
+      await recorder.start()
+      speech = await webSpeech.probe({ ms })
+    }
+  } catch (err) {
+    recorder.cancel()
+    return {
+      ok: false,
+      reason: err?.name || 'failed',
+      detail: `Could not open the microphone: ${err?.name || err}`,
+    }
+  }
+
+  let bytes = 0
+  try {
+    const out = await recorder.stop()
+    bytes = out.blob?.size || 0
+  } catch {
+    recorder.cancel()
+  }
+
+  const heardWords = !!speech?.heard
+  const recordingAlive = bytes > 0 && peak >= 0.02
+
+  return {
+    ok: heardWords && recordingAlive,
+    heard: speech?.heard || '',
+    peak,
+    bytes,
+    heardWords,
+    recordingAlive,
+    detail: heardWords
+      ? recordingAlive
+        ? `Heard "${speech.heard}" and the recording has sound (peak ${Math.round(peak * 100)}%).`
+        : `Heard "${speech.heard}" BUT the recording came out silent (peak ${Math.round(peak * 100)}%) — unusable.`
+      : recordingAlive
+        ? `Recording fine (peak ${Math.round(peak * 100)}%) but no words came back.`
+        : 'Neither the words nor the recording worked.',
+  }
+}
+
+/**
+ * Runs every combination in turn. The caller must keep the user talking
+ * throughout — silence looks identical to contention.
+ */
+export async function findMicCombination({ onStep } = {}) {
+  const results = []
+  for (const combo of COMBINATIONS) {
+    onStep?.({ ...combo, running: true }, [...results])
+    const outcome = await tryCombination(combo)
+    const row = { ...combo, ...outcome, running: false }
+    results.push(row)
+    onStep?.(row, [...results])
+    if (row.ok) break // first winner is enough
+    // Android needs a beat to actually release the audio focus.
+    await new Promise((r) => setTimeout(r, 700))
+  }
+  return results
+}
+
 /**
  * Asks for the microphone from inside a user gesture. This is the call that has
  * to happen on a tap in the installed app — a WebAPK is a separate Android

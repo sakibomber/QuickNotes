@@ -125,6 +125,7 @@ export default function Record() {
     savingRef.current = false
 
     const recorder = new Recorder({
+      audioProfile: settings.audioProfile,
       onLevel: setLevel,
       onError: () => {
         /* a mid-capture recorder fault still leaves the chunks collected */
@@ -132,29 +133,17 @@ export default function Record() {
     })
     recorderRef.current = recorder
 
-    try {
-      await recorder.start()
-    } catch (err) {
-      recorderRef.current = null
-      startingRef.current = false
-      const name = err?.name || 'UnknownError'
-      setErrorName(name)
-      setError(micErrorMessage(err))
-      // Anything permission-shaped stays on the one-tap screen, because a tap
-      // is exactly what might fix it. Everything else is a hard stop.
-      setPhase(
-        name === 'NotAllowedError' || name === 'SecurityError' || name === 'NotReadableError'
-          ? PHASE.READY
-          : PHASE.ERROR
-      )
-      return
-    }
-
-    // Live transcription rides alongside the recording. If the speech service
-    // and the recorder fight over the mic, the recording still wins — audio is
-    // the source of truth and the transcript can be fixed in triage.
     const engine = getTranscriber(settings.transcriber)
-    if (settings.liveTranscribe && engine.live) {
+    const wantsSpeech = settings.liveTranscribe && engine.live
+
+    /**
+     * On some phones the microphone can only be shared if the speech service
+     * asks for it first — the recorder otherwise takes it outright and the
+     * speech service is handed silence. Settings → Microphone finds which
+     * order works; this honours it.
+     */
+    const startSpeech = () => {
+      if (!wantsSpeech) return
       try {
         sessionRef.current = engine.createSession({
           onPartial: (text) => {
@@ -182,12 +171,47 @@ export default function Record() {
       }
     }
 
+    if (settings.speechFirst) {
+      startSpeech()
+      await new Promise((r) => setTimeout(r, 400))
+    }
+
+    try {
+      await recorder.start()
+    } catch (err) {
+      recorderRef.current = null
+      startingRef.current = false
+      const name = err?.name || 'UnknownError'
+      setErrorName(name)
+      setError(micErrorMessage(err))
+      // Anything permission-shaped stays on the one-tap screen, because a tap
+      // is exactly what might fix it. Everything else is a hard stop.
+      setPhase(
+        name === 'NotAllowedError' || name === 'SecurityError' || name === 'NotReadableError'
+          ? PHASE.READY
+          : PHASE.ERROR
+      )
+      return
+    }
+
+    // Live transcription rides alongside the recording. If the speech service
+    // and the recorder fight over the mic, the recording still wins — audio is
+    // the source of truth and the transcript can be fixed in triage.
+    if (!settings.speechFirst) startSpeech()
+
     acquireWakeLock()
     haptic(18)
     setElapsed(0)
     startingRef.current = false
     setPhase(PHASE.RECORDING)
-  }, [settings.transcriber, settings.liveTranscribe, acquireWakeLock, haptic])
+  }, [
+    settings.transcriber,
+    settings.liveTranscribe,
+    settings.audioProfile,
+    settings.speechFirst,
+    acquireWakeLock,
+    haptic,
+  ])
 
   /* ---------------------------------------------------- stop and save */
 
