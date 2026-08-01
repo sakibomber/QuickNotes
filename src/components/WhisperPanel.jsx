@@ -57,7 +57,11 @@ export default function WhisperPanel({ onToast }) {
 
   /** Times one real recording so the spike has numbers, not impressions. */
   const benchmark = async () => {
-    const candidate = notes.find((n) => n.audioBlobId)
+    // Longest recording available: a realtime factor measured on a 2-second
+    // clip is dominated by fixed startup cost and tells you nothing useful.
+    const candidate = notes
+      .filter((n) => n.audioBlobId)
+      .sort((a, b) => (b.duration || 0) - (a.duration || 0))[0]
     if (!candidate) {
       onToast?.('Record a note first, then run this')
       return
