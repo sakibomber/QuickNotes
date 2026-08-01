@@ -1,0 +1,9 @@
+# Normalise to LF in the repo. CI runs on Linux; the icons are generated
+# byte-for-byte by a script and must never be line-ending "fixed".
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.zip binary
+*.woff  binary
+*.woff2 binary

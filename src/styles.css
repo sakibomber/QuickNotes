@@ -1,0 +1,378 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+   QUICK NOTES — design language
+   One family, two skins:
+     dark  = ink & olive     (field notebook at night)
+     sepia = field paper     (the "book" mode)
+   Everything is a ruled-paper card with stamped labels.
+   ========================================================================= */
+
+:root {
+  --ui-scale: 1;
+}
+
+/* ---------- DARK: ink / olive ---------- */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --c-bg: #14170f;
+  --c-bg-2: #1b1f16;
+  --c-surface: #232819;
+  --c-surface-2: #2c3220;
+  --c-line: #3d452e;
+  --c-line-soft: #2f3623;
+  --c-text: #eee7d2;
+  --c-muted: #9aa383;
+  --c-faint: #6d7659;
+  --c-accent: #a8b545;
+  --c-accent-2: #cbd96b;
+  --c-on-accent: #171a10;
+  --c-danger: #c8563c;
+  --c-on-danger: #fdf3ec;
+  --c-good: #7ea04d;
+  --c-stamp: #c8563c;
+  --c-rule: #2f3623;
+  --c-margin-rule: #7a3b2c;
+  --c-shadow: rgba(0, 0, 0, 0.45);
+  --c-scrim: rgba(8, 10, 6, 0.72);
+  --paper-tint: rgba(255, 255, 255, 0.012);
+}
+
+/* ---------- SEPIA: field paper ---------- */
+:root[data-theme='sepia'] {
+  color-scheme: light;
+
+  --c-bg: #e8dcc0;
+  --c-bg-2: #f2e9d3;
+  --c-surface: #faf3e0;
+  --c-surface-2: #f3e8cd;
+  --c-line: #cbb894;
+  --c-line-soft: #ddcfae;
+  --c-text: #33291c;
+  --c-muted: #6f6045;
+  --c-faint: #948360;
+  --c-accent: #5c6b2f;
+  --c-accent-2: #47541f;
+  --c-on-accent: #fbf6e8;
+  --c-danger: #a3402a;
+  --c-on-danger: #fdf3ec;
+  --c-good: #4f6b2c;
+  --c-stamp: #a3402a;
+  --c-rule: #d8c8a4;
+  --c-margin-rule: #c98a7a;
+  --c-shadow: rgba(74, 58, 32, 0.18);
+  --c-scrim: rgba(48, 39, 24, 0.55);
+  --paper-tint: rgba(120, 90, 40, 0.025);
+}
+
+@theme inline {
+  --color-bg: var(--c-bg);
+  --color-bg2: var(--c-bg-2);
+  --color-surface: var(--c-surface);
+  --color-surface2: var(--c-surface-2);
+  --color-line: var(--c-line);
+  --color-linesoft: var(--c-line-soft);
+  --color-ink: var(--c-text);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+  --color-accent2: var(--c-accent-2);
+  --color-onaccent: var(--c-on-accent);
+  --color-danger: var(--c-danger);
+  --color-ondanger: var(--c-on-danger);
+  --color-good: var(--c-good);
+  --color-stamp: var(--c-stamp);
+
+  --font-sans:
+    'Inter', 'Roboto', system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-serif: 'Iowan Old Style', 'Noto Serif', Georgia, 'Times New Roman', serif;
+  --font-stamp: 'Roboto Condensed', 'Arial Narrow', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Roboto Mono', 'Droid Sans Mono', ui-monospace, 'Courier New', monospace;
+
+  --radius-card: 0.75rem;
+}
+
+html {
+  font-size: calc(16px * var(--ui-scale));
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-sans);
+  overscroll-behavior: none;
+  /* App is locked to the viewport; only inner regions scroll. */
+  height: 100dvh;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+#root {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+}
+
+/* ---------------------------------------------------------------- surfaces */
+
+.paper {
+  background-color: var(--c-surface);
+  background-image: linear-gradient(var(--paper-tint), var(--paper-tint));
+  border: 1px solid var(--c-line);
+  box-shadow: 0 2px 0 var(--c-shadow);
+}
+
+/* Ruled-paper card: horizontal rules + a red margin rule down the left. */
+.ruled {
+  --rule-h: 2rem;
+  background-image:
+    linear-gradient(to bottom, transparent calc(var(--rule-h) - 1px), var(--c-rule) 0);
+  background-size: 100% var(--rule-h);
+  background-position: 0 0.35rem;
+}
+
+.ruled-margin {
+  position: relative;
+}
+.ruled-margin::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  left: 1.75rem;
+  width: 1px;
+  background: var(--c-margin-rule);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ stamps */
+
+.stamp-label {
+  font-family: var(--font-stamp);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+}
+
+/* The big rotated rubber stamp that lands when a note is filed/trashed/saved. */
+.stamp-mark {
+  font-family: var(--font-stamp);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 800;
+  border: 0.28rem solid currentColor;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  opacity: 0.92;
+  mix-blend-mode: normal;
+}
+
+@keyframes stamp-in {
+  0% {
+    transform: rotate(-14deg) scale(2.4);
+    opacity: 0;
+  }
+  55% {
+    transform: rotate(-9deg) scale(0.94);
+    opacity: 1;
+  }
+  70% {
+    transform: rotate(-9deg) scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(-9deg) scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes stamp-out {
+  to {
+    opacity: 0;
+    transform: rotate(-9deg) scale(1.06);
+  }
+}
+
+/* Durations derive from --stamp-ms (src/ui/constants.js STAMP_MS), so the
+   animation and the gesture guard that waits on it can never drift apart.
+   0.295 / 0.705 is the original 260ms-in / 620ms-hold split of an 880ms stamp. */
+.animate-stamp {
+  --stamp-ms: 880ms;
+  animation:
+    stamp-in calc(var(--stamp-ms) * 0.295) cubic-bezier(0.2, 0.9, 0.3, 1.4) forwards,
+    stamp-out calc(var(--stamp-ms) * 0.295) ease-in calc(var(--stamp-ms) * 0.705) forwards;
+}
+
+/* ---------------------------------------------------------------- motion */
+
+@keyframes rise {
+  from {
+    transform: translateY(0.75rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+.animate-rise {
+  animation: rise 200ms ease-out both;
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.animate-sheet {
+  animation: sheet-up 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-fade {
+  animation: fade-in 160ms ease-out both;
+}
+
+@keyframes deal-in {
+  from {
+    transform: translateY(1.5rem) scale(0.97);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.animate-deal {
+  animation: deal-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes pulse-rec {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.86);
+  }
+}
+.animate-rec {
+  animation: pulse-rec 1.4s ease-in-out infinite;
+}
+
+@keyframes ring-out {
+  0% {
+    transform: scale(0.9);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+.animate-ring {
+  animation: ring-out 2.2s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-stamp,
+  .animate-rise,
+  .animate-sheet,
+  .animate-fade,
+  .animate-deal,
+  .animate-rec,
+  .animate-ring {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* --------------------------------------------------------------- utilities */
+
+.tap {
+  /* Every interactive thing clears the 56px minimum from the spec. */
+  min-height: 3.5rem;
+  min-width: 3.5rem;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.scroll-y {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The triage swipe surface: vertical scroll still works, horizontal is ours,
+   and nothing selects text under a drag. */
+.swipe-surface {
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.press {
+  transition:
+    transform 90ms ease,
+    filter 90ms ease,
+    background-color 120ms ease;
+}
+.press:active {
+  transform: scale(0.975);
+  filter: brightness(1.08);
+}
+
+.focus-ring:focus-visible {
+  outline: 3px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.line-through-soft {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--c-stamp);
+}
+
+.safe-b {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-t {
+  padding-top: env(safe-area-inset-top, 0px);
+}

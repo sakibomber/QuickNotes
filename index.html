@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="theme-color" content="#14170F" />
+    <meta name="description" content="Quick Notes — Capture. File. Remember." />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Quick Notes" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" href="./icons/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png" />
+    <title>Quick Notes</title>
+    <script>
+      // Apply the saved theme + text size before first paint so there is no flash.
+      // Settings live in IndexedDB (async), so a mirror is kept in localStorage purely
+      // for this synchronous boot step.
+      try {
+        var t = localStorage.getItem('qn.theme');
+        if (t === 'sepia' || t === 'dark') document.documentElement.dataset.theme = t;
+        var s = localStorage.getItem('qn.textScale');
+        if (s) document.documentElement.style.setProperty('--ui-scale', s);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>Quick Notes needs JavaScript to run.</noscript>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

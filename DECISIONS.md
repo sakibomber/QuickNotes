@@ -1,0 +1,132 @@
+# Quick Notes — decision log
+
+**Build:** v1.0.0 · 2026-07-31
+**Contract:** `documents/quick-notes-spec.md`. Where anything here conflicts with the spec, the spec wins and the conflict is written up as a dated addendum at the bottom rather than by editing the spec.
+
+---
+
+## 0. Prototype provenance
+
+`documents/quick-notes-v2.jsx` and `documents/quick-notes-prototype.jsx` were **supplied mid-build**. They were used as a **visual-language reference** and, in v2's case, as the **tested source for the triage gesture structure**. They are chat-artifact prototypes — adapted, not copied.
+
+What came from v2:
+
+| Taken | Not taken | Why |
+|---|---|---|
+| Gesture structure: `touch-action: pan-y`, immediate pointer capture, guards on `editing \| picker \| stamp`, `rotate(dx/60)`, 200 ms ease spring-back, reset-on-note-id | — | It is the tested arrangement; the trap it avoids is documented in spec §3 |
+| Ink/olive dark + sepia paper light, ruled-paper cards, rotated rubber stamp, uppercase condensed stamped labels | Exact hex values | Same family, re-derived against contrast requirements for spec §12 |
+| Nine buckets with per-bucket colour + icon | Hardcoding them | Spec §6 requires buckets be user-editable |
+| — | Google Fonts (`Oswald` / `Public Sans` via `@import`) | Offline-first (spec §2). A webfont import is a network dependency on the capture path. System stacks with condensed fallbacks instead |
+| — | 5-slot nav with centre Record | Spec §3 locked 4 tabs with Kyle on 7/31 *after* the mockup review, so the spec supersedes the prototype here. Record is a full-screen route plus a visible mic button in every main screen header |
+| — | Simulated transcription | Real Web Speech behind the swappable interface (spec §4) |
+
+## 1. Swipe tuning reconciliation
+
+**Structure from v2. Tuning is this build's own. The two converged, which is the reason it is settled.**
+
+- v2 commits at a flat **±90 px**. On the S23 Ultra's 412 px viewport that is **~21.8%** of the width.
+- This build commits at **`COMMIT_RATIO = 0.24`** of the surface width — **~99 px** on the same device.
+
+Two independent passes landing within ~9 px of each other is convergent validation, not a conflict. The ratio is kept because it holds the same feel on a narrower phone, which matters once this goes to other veterans on hardware nobody has picked yet.
+
+Retained beyond v2, deliberately:
+
+- **Axis detection** (12 px slop, horizontal must beat vertical by 1.3×). v2's card did not scroll; this one does — long transcripts scroll inside the surface, so a vertical drag has to reach the scroller instead of dragging the card.
+- **Flick velocity** (`> 0.55 px/ms` commits regardless of distance). A fast short flick is a deliberate gesture and should not be rejected for falling 20 px short.
+
+Adopted from v2 in this pass: `rotate(dx/60)` replacing `dx * 0.012` (a stronger tilt — `dx/60` vs `dx/83`). **Flag for the S23 feel-test:** this is the one gesture value changed on the strength of the prototype rather than measured here.
+
+## 2. Gesture-reconciliation punch list (applied this pass)
+
+1. **`src/ui/constants.js`** — `STAMP_MS = 880`, `STAMP_GUARD_MS = STAMP_MS + 40`. Both stamp sites (Inbox, Record) consume it. One number, so animation and input-guard cannot drift apart.
+2. **Stamp guard on the surface** — `flashStamp` holds the swipe surface shut for `STAMP_GUARD_MS`; `onPointerDown` early-returns while a stamp is showing; `flashStamp` hard-cancels any in-flight gesture (`drag.current.active/axis` cleared, `dx` reset). Without this the follow-through of a flick files the *next* note too — the note behind the one you meant. Covered by a test that drives a real double-flick.
+3. **Note-change effect resets the gesture** — `dx`, `springing` and `drag.current` reset alongside edit state, or the incoming card inherits the outgoing card's transform. `AudioPlayer` already resets itself on `note.audioBlobId`; not duplicated.
+4. **Explicit picker guard in `onPointerDown`**, commented do-not-remove. Redundant today because the sheet has its own scrim; it is there so a later change to sheet layering cannot silently allow a drag underneath an open picker.
+5. **`rotate(dx/60)`** — see §1.
+6. **`--stamp-ms` threaded from the constant into `Stamp`** via a `style` passthrough; `.animate-stamp` derives its own timings with `calc(var(--stamp-ms) * 0.295)` / `* 0.705`, replacing hard-coded 260 ms / 620 ms.
+7. **Reduced-motion branch in `flashStamp`** — `matchMedia('(prefers-reduced-motion: reduce)')` read at call time (no listener; this runs a few times a day). Falls back to a ~120 ms debounce instead of the full guard. **This branch is load-bearing, not cosmetic:** `styles.css` forces `animation-duration: 1ms !important` under reduced motion, so the full guard would swallow input for ~920 ms after a visually instant stamp.
+8. **`Record.jsx` SavedScreen** — `setTimeout(..., 1000)` replaced with `STAMP_MS`.
+
+## 3. Architecture
+
+| Decision | Reasoning |
+|---|---|
+| **Hash routing** (`#/record`), ~60 lines, no router dependency | Works on any static host with no rewrite rules, and fires `hashchange` when Android focuses an already-open PWA window rather than cold-starting it — which is exactly what the Record shortcut does on the second tap |
+| **Relative manifest URLs** (`start_url: "."`, `url: "./#/record"`) | Deploys to a domain root or a sub-path (GitHub Pages) with no edit. `BASE_PATH` env var drives Vite's `base` |
+| **Hand-rolled IndexedDB wrapper** (~140 lines, no `idb`) | This is the layer that must never break because a dependency moved on. It is small enough to own outright |
+| **Whole store in memory, audio blobs on demand** | Notes are small text records; blobs are not. Search over everything stays instant |
+| **`writeNotes` helper** — every note write updates ref and React state together | Two taps inside one frame could otherwise read a stale list and silently drop the first change. In this app that means a lost note |
+| **Boot runs once per page load** via a module-level promise | StrictMode double-mounts in dev; without this the first-run seed notes are written twice |
+| **No service-worker update prompt** (`registerType: 'autoUpdate'`) | "An update is available" is a decision nobody asked for. New build is taken silently on next launch |
+| **Icons generated procedurally at build time** (`scripts/gen-icons.mjs`, raw PNG encoding via zlib) | No binary assets in the repo, no image dependency, and the two home-screen marks stay in sync with the palette |
+
+## 4. Data and safety
+
+| Decision | Reasoning |
+|---|---|
+| **Audio sweep deferred 12 s past filing**, not immediate | Makes undo able to restore a filed note *with its recording intact*. Immediate deletion would make undo a lie |
+| **Never drop audio when the transcript is empty** — hard guard, beyond spec | Spec §5: "a mangled note that can't be audited is worse than no note." A note with no text at all is that case taken to its limit; the recording is the only copy of the thought. Extracted as a pure function (`shouldDropAudio`) and tested directly because it is the only rule in the app that destroys data |
+| **Undo on every filing and every clear** (8 s), beyond spec | Misfiles are the expected failure mode for the intended users. Cheap to offer, expensive to omit |
+| **Deleting a bucket returns its notes to the Inbox** rather than deleting them | Losing a note to a tidy-up is a memory erased. The user is told how many came back |
+| **Trashing keeps the recording** | Trash is recoverable; a note in it has not been decided on yet |
+| **Storage persistence requested** (`navigator.storage.persist()`) | Android's automatic storage cleanup can otherwise evict a week of captures |
+| **Backup excludes audio** | Spec §9 requires the file be *readable*. Base64 audio would make it neither readable nor emailable. The file says so explicitly in its own `audioNote` field |
+| **Import offers merge or replace**, two full-size buttons | One decision, both answers visible. Merge is by note id, so re-importing the same file is idempotent |
+
+## 5. Interaction and scope calls
+
+| Decision | Reasoning |
+|---|---|
+| **Split generalised from Grocery to any checklist bucket** | Spec §8 says Grocery; buckets are user-editable (§6), so the behaviour keys off `type === 'checklist'`. Todo benefits identically. Still confirmed, never automatic |
+| **Split makes the original note the first item** | Keeps the recording and the original timestamp attached to something real instead of orphaning them |
+| **Grocery dictionary keyed per bucket** (compound key `[bucketId, term]`) | Todo vocabulary polluting Grocery suggestions would make autocomplete worse than none |
+| **Bucket reorder via up/down buttons, not drag** | Drag-and-drop is unkind to a tremor. Same reason there is no long-press anywhere |
+| **Per-item delete behind a visible "Edit list" toggle** | Spec §3 forbids hidden ⋮ menus. A labelled toggle that reveals full-size controls is visible; a delete button on every row is a mis-tap waiting to happen |
+| **Text size setting** (Normal / Large / Largest), beyond spec | Spec §12 calls for large default type for a TBI audience; one segmented control is not a settings maze |
+| **Wake lock held while recording** | Spec §3 says a screen-off saves the capture. Better to not lose the sentence in the first place |
+| **Leaving the record screen saves rather than discards**; Cancel is a separate, confirmed action | "Never lose a capture to a distracted exit" (§3). The only way to lose audio is to answer a direct question |
+| **Live-transcription toggle in Settings** | The documented degradation path if the speech service and the recorder contend for the microphone. Audio is the source of truth; text is the convenience |
+| **Record button in every main screen header** | Spec §3 asks for a visible Record button in the app. Same position on every screen is worth more than saved pixels for this audience |
+
+## 6. Verification
+
+Browser automation was declined for this session and no S23 is attached, so verification is **45 automated tests** (`npm test`): a pure-logic suite plus a jsdom + `fake-indexeddb` pass that mounts the real app, walks every route, and drives real pointer sequences across the triage surface — including the double-flick that the stamp guard exists to stop. Any `console.error` fails the run.
+
+What that **cannot** cover, and therefore has to be checked on the device: microphone permission on an installed PWA, the shortcut cold-start path, whether Web Speech and MediaRecorder can share the microphone on this handset, and gesture feel. See "Deferred / needs device" in the handover.
+
+## 8. Deployment
+
+**GitHub Actions building on every push to `main`**, rather than committing a built `dist/` to a `gh-pages` branch. A hand-published branch drifts from source the first time someone is in a hurry; a workflow cannot. `dist/` is gitignored for the same reason — the repo holds source, CI holds output.
+
+**`npm test` gates the deploy.** A red suite stops the publish. This app goes to people who cannot distinguish a broken build from a bad day, so shipping past failing tests is not a trade worth having.
+
+**No `BASE_PATH` is set, deliberately — this is a deviation from the instruction to build with `BASE_PATH=/QuickNotes/`.**
+The build defaults to relative asset URLs (`base: './'`), which was verified to serve correctly both from a domain root and from the exact `/QuickNotes/` sub-path — HTML, CSS, JS, `sw.js`, the workbox chunk, all seven icons, and the manifest's `start_url`, `scope`, shortcut URL and shortcut icon all resolve. Reasons to prefer it over an absolute base:
+
+- An absolute `/QuickNotes/` hardcodes the repo name into the bundle. Renaming the repo, or later pointing a custom domain at the root, silently breaks every asset.
+- It is one build for every host, so the "which base did I build with?" mistake stops existing.
+- It works because the app hash-routes (every navigation is the same document) and vite-plugin-pwa already emits a relative precache manifest.
+
+`BASE_PATH` is still honoured in `vite.config.js` if a host ever needs an absolute prefix.
+
+**Trap worth knowing:** on Git Bash for Windows, `BASE_PATH=/QuickNotes/ npm run build` is rewritten by MSYS path conversion into `/Program Files/Git/QuickNotes/` and produces a silently broken bundle. Quote it, prefix with `MSYS_NO_PATHCONV=1`, or use PowerShell. Found while testing the sub-path variant.
+
+## 7. Settled — do not relitigate
+
+- Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype
+- Stamp duration 880 ms and the guard pinned to it
+- 4-tab nav, Record as a full-screen route (spec §3, locked after mockup review)
+- Backup excludes audio
+- Hash routing
+- Inbox as a pseudo-bucket (see addendum A)
+- System fonts, no webfonts
+
+---
+
+## Addenda — spec contradictions
+
+**A · 2026-07-31 · §3, "/record → note goes to Inbox (bucket = Temp/unsorted)".**
+Implemented as `bucketId: 'inbox'`, a pseudo-bucket that is not in the user-editable bucket list, rather than as the real `Temp` bucket. Reason: §3's nav and §7 both treat Inbox as the triage queue with its own badge count, and `Temp` is listed in §6 as one of nine *filing destinations*. Making them the same store would mean filing a note to Temp puts it back in the triage queue forever. `Temp` remains available as the "not sure yet" destination it reads as. No spec edit made.
+
+**B · 2026-07-31 · §8, grocery item model `{text, checked, count?}`.**
+Grocery items are stored as ordinary `Note` records (`transcript`, `checked`) rather than a second model, so a checklist item and a filed voice note are the same kind of thing and the split in §8 is a field edit rather than a type conversion. The mapping to `{text, checked}` is `{text: note.transcript, checked: note.checked}` — one line, so the future AnyList merge still does not require a migration, which was the stated intent.

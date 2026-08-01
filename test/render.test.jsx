@@ -1,0 +1,407 @@
+/**
+ * Render + interaction test. Mounts the real app against a fake IndexedDB in a
+ * jsdom window, then walks every route and does a full capture-to-filed loop.
+ *
+ * This is not a unit test — it is the closest thing to "open the app and press
+ * things" that runs without a phone. Any console error fails the run.
+ *
+ * Bundled by scripts/run-tests.mjs (esbuild) because Node cannot import JSX.
+ */
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { JSDOM } from 'jsdom'
+import 'fake-indexeddb/auto'
+
+/* ------------------------------------------------------- browser world */
+
+const dom = new JSDOM(
+  `<!doctype html><html data-theme="dark"><head><meta name="theme-color" content="#14170F"></head><body><div id="root"></div></body></html>`,
+  { url: 'http://localhost/', pretendToBeVisual: true }
+)
+
+const win = dom.window
+const define = (key, value) =>
+  Object.defineProperty(globalThis, key, { value, configurable: true, writable: true })
+
+define('window', win)
+define('document', win.document)
+define('navigator', win.navigator)
+define('location', win.location)
+define('history', win.history)
+define('HTMLElement', win.HTMLElement)
+define('Element', win.Element)
+define('Node', win.Node)
+define('Event', win.Event)
+define('CustomEvent', win.CustomEvent)
+define('MutationObserver', win.MutationObserver)
+define('requestAnimationFrame', win.requestAnimationFrame.bind(win))
+define('cancelAnimationFrame', win.cancelAnimationFrame.bind(win))
+define('localStorage', win.localStorage)
+define('IS_REACT_ACT_ENVIRONMENT', true)
+
+// jsdom has no object URLs, no media and no clipboard.
+win.URL.createObjectURL = () => 'blob:stub'
+win.URL.revokeObjectURL = () => {}
+win.HTMLMediaElement.prototype.play = () => Promise.resolve()
+win.HTMLMediaElement.prototype.pause = () => {}
+
+// Surface any console error as a test failure — silent breakage is the enemy.
+const consoleErrors = []
+const realError = console.error
+console.error = (...args) => {
+  consoleErrors.push(args.map(String).join(' '))
+  realError(...args)
+}
+
+/* ------------------------------------------------------------ imports */
+
+const React = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { act } = React
+const { default: App } = await import('../src/App.jsx')
+const { RouterProvider } = await import('../src/lib/router.jsx')
+const { StoreProvider } = await import('../src/lib/store.jsx')
+const { STAMP_GUARD_MS } = await import('../src/ui/constants.js')
+
+/* ------------------------------------------------------------ helpers */
+
+const root = createRoot(document.getElementById('root'))
+
+async function flush(times = 3) {
+  for (let i = 0; i < times; i++) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+}
+
+function text() {
+  return document.getElementById('root').textContent || ''
+}
+
+/** Finds the smallest clickable element whose text contains `needle`. */
+function button(needle, { exact = false } = {}) {
+  const candidates = [...document.querySelectorAll('button, a, [role="button"]')].filter((el) => {
+    const label = `${el.textContent || ''} ${el.getAttribute('aria-label') || ''}`.trim()
+    return exact ? label === needle : label.toLowerCase().includes(needle.toLowerCase())
+  })
+  candidates.sort((a, b) => (a.textContent?.length || 0) - (b.textContent?.length || 0))
+  return candidates[0] || null
+}
+
+async function click(needle, opts) {
+  const el = button(needle, opts)
+  assert.ok(el, `no clickable element matching "${needle}"`)
+  await act(async () => {
+    el.dispatchEvent(new win.MouseEvent('click', { bubbles: true, cancelable: true }))
+  })
+  await flush(2)
+  return el
+}
+
+async function typeInto(selector, value) {
+  const el = document.querySelector(selector)
+  assert.ok(el, `no input matching ${selector}`)
+  const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, 'value').set
+  await act(async () => {
+    setter.call(el, value)
+    el.dispatchEvent(new win.Event('input', { bubbles: true }))
+  })
+  await flush(2)
+  return el
+}
+
+/**
+ * Drives a real drag across the triage surface. jsdom has no PointerEvent, so
+ * the native events are built by hand — React reads clientX off the native
+ * event either way.
+ */
+function pointer(type, x, y = 300) {
+  const e = new win.Event(type, { bubbles: true, cancelable: true })
+  Object.assign(e, {
+    clientX: x,
+    clientY: y,
+    pointerId: 1,
+    pointerType: 'touch',
+    button: 0,
+    isPrimary: true,
+  })
+  return e
+}
+
+function surface() {
+  const el = document.querySelector('.swipe-surface')
+  assert.ok(el, 'the triage swipe surface is on screen')
+  return el
+}
+
+async function swipe(distance) {
+  const el = surface()
+  const from = 200
+  await act(async () => {
+    el.dispatchEvent(pointer('pointerdown', from))
+  })
+  // Several moves, like a finger: the first crosses the axis-decision gate.
+  for (const step of [0.3, 0.7, 1]) {
+    await act(async () => {
+      el.dispatchEvent(pointer('pointermove', from + distance * step))
+    })
+  }
+  await act(async () => {
+    el.dispatchEvent(pointer('pointerup', from + distance))
+  })
+  await flush(3)
+}
+
+async function go(hash) {
+  await act(async () => {
+    win.location.hash = hash
+    win.dispatchEvent(new win.Event('hashchange'))
+  })
+  await flush(3)
+}
+
+/* ------------------------------------------------------------- tests */
+
+test('boots into the inbox with the first-run notes waiting', async () => {
+  await act(async () => {
+    root.render(
+      <React.StrictMode>
+        <RouterProvider>
+          <StoreProvider>
+            <App />
+          </StoreProvider>
+        </RouterProvider>
+      </React.StrictMode>
+    )
+  })
+  await flush(6)
+
+  assert.match(text(), /Inbox/, 'inbox header')
+  assert.match(text(), /Swipe RIGHT to file it/, 'the teaching note is on screen')
+  assert.match(text(), /2 waiting/, 'both seed notes counted')
+  // Nav is always present.
+  for (const tab of ['Inbox', 'Buckets', 'Search', 'Settings']) {
+    assert.ok(button(tab), `${tab} tab exists`)
+  }
+})
+
+test('the note renders as static text, not a textarea, so swipe can work', async () => {
+  assert.equal(
+    document.querySelector('textarea'),
+    null,
+    'no textarea until the pencil is pressed — that is what kills the gesture'
+  )
+  assert.ok(button('Fix the words'), 'the pencil toggle is there')
+})
+
+test('the pencil toggle opens an editor and saves the corrected words', async () => {
+  await click('Fix the words')
+  const area = document.querySelector('textarea')
+  assert.ok(area, 'edit mode gives a textarea')
+  assert.match(text(), /Swiping is off while you edit/, 'swipe is explicitly disabled')
+
+  const setter = Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, 'value').set
+  await act(async () => {
+    setter.call(area, 'corrected by hand')
+    area.dispatchEvent(new win.Event('input', { bubbles: true }))
+  })
+  await click('Done editing')
+
+  assert.equal(document.querySelector('textarea'), null, 'editor closes')
+  assert.match(text(), /corrected by hand/, 'the correction stuck')
+})
+
+test('tapping a bucket files the note and offers an undo', async () => {
+  await click('Doc')
+  await flush(3)
+  assert.match(text(), /Filed to Doc/, 'toast confirms')
+  assert.ok(button('Undo'), 'undo is offered at full size')
+  assert.match(text(), /1 waiting/, 'the inbox moved on to the next note')
+})
+
+test('undo puts the note back in the inbox', async () => {
+  await click('Undo')
+  await flush(3)
+  assert.match(text(), /2 waiting/, 'back to two')
+})
+
+/** Waits out the stamp guard so a test starts with a live swipe surface. */
+async function settle() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, STAMP_GUARD_MS + 60))
+  })
+  await flush(2)
+}
+
+const waiting = () => Number(text().match(/(\d+) waiting/)?.[1] ?? 0)
+
+test('a vertical drag scrolls and never files anything', async () => {
+  await go('#/inbox')
+  await settle()
+  const before = waiting()
+  const el = surface()
+  await act(async () => {
+    el.dispatchEvent(pointer('pointerdown', 200, 300))
+  })
+  for (const y of [340, 400, 460]) {
+    await act(async () => {
+      el.dispatchEvent(pointer('pointermove', 205, y))
+    })
+  }
+  await act(async () => {
+    el.dispatchEvent(pointer('pointerup', 205, 460))
+  })
+  await flush(2)
+  assert.equal(waiting(), before, 'a scroll is not a swipe')
+  assert.ok(!text().includes('File it where?'), 'and it did not open the picker')
+})
+
+test('swiping right opens the full-screen bucket picker', async () => {
+  await settle()
+  assert.ok(waiting() >= 2, 'two notes to work with')
+  await swipe(180)
+  assert.match(text(), /File it where\?/, 'swipe right asks where, it does not guess')
+  await click('Close', { exact: false })
+  await flush(2)
+})
+
+test('swiping left trashes one note — and the follow-through cannot take a second', async () => {
+  await settle()
+  const before = waiting()
+  assert.ok(before >= 2, 'a second note is behind the first, so a slip would cost something')
+
+  await swipe(-180)
+  assert.match(text(), /Thrown away|Trashed/, 'stamped and toasted')
+  const during = waiting()
+  assert.equal(during, before - 1, 'exactly one note left the inbox')
+
+  // The same flick's follow-through, while the stamp is still up.
+  await swipe(-180)
+  assert.equal(waiting(), during, 'the second swipe was swallowed by the stamp guard')
+})
+
+test('once the stamp lifts, the surface takes the next swipe', async () => {
+  await settle()
+  assert.ok(!text().includes('Trashed'), 'the stamp has lifted')
+  const before = waiting()
+  await swipe(-180)
+  assert.equal(waiting(), before - 1, 'the guard released rather than latching')
+})
+
+test('the buckets grid shows every starting bucket', async () => {
+  await go('#/buckets')
+  for (const name of ['Temp', 'Reminders', 'Doc', 'Wife', 'Kid', 'Todo', 'Grocery', 'Notes', 'Thoughts']) {
+    assert.match(text(), new RegExp(name), `${name} tile`)
+  }
+  assert.match(text(), /Trash/, 'trash is reachable but out of the way')
+})
+
+test('a bucket opens, takes a typed item, and crosses it off', async () => {
+  await go('#/buckets/grocery')
+  assert.match(text(), /Checklist/, 'grocery renders as a checklist')
+
+  await typeInto('input[aria-label="Add to Grocery"]', 'Milk')
+  await click('Add', { exact: true })
+  assert.match(text(), /Milk/, 'the item is on the list')
+
+  await click('Milk')
+  await flush(2)
+  assert.ok(button('Clear 1 finished'), 'clearing finished items is offered once something is done')
+
+  await click('Clear 1 finished')
+  await flush(3)
+  assert.match(text(), /Archived 1/, 'archived, not deleted — history is clinical evidence')
+  assert.match(text(), /Show history \(1\)/, 'and it is still findable')
+})
+
+test('typing a learned word offers it back as autocomplete', async () => {
+  await typeInto('input[aria-label="Add to Grocery"]', 'mi')
+  await flush(2)
+  assert.ok(button('Milk', { exact: true }), '"mi" suggests "Milk" from what was filed before')
+})
+
+test('search finds a filed note and its bucket', async () => {
+  await go('#/search')
+  await typeInto('input[aria-label="Search your notes"]', 'milk')
+  await flush(3)
+  assert.match(text(), /Milk/, 'the archived item is still searchable')
+  assert.match(text(), /Grocery/, 'and it says where it lives')
+})
+
+test('search filters do not crash and can be cleared', async () => {
+  await click('Has voice')
+  await flush(2)
+  assert.match(text(), /Nothing matches|matches/, 'filtering ran')
+  await click('Clear', { exact: false })
+  await flush(2)
+})
+
+test('settings renders every group on one screen', async () => {
+  await go('#/settings')
+  for (const heading of ['Look', 'Recording', 'On your home screen', 'Backup', 'This app']) {
+    assert.match(text(), new RegExp(heading), `${heading} section`)
+  }
+  assert.match(text(), /Until filed/, 'audio retention is a setting')
+  assert.match(text(), /Ask me/)
+  assert.match(text(), /Erase everything/)
+})
+
+test('switching to paper mode changes the theme immediately', async () => {
+  await click('Paper')
+  await flush(2)
+  assert.equal(document.documentElement.dataset.theme, 'sepia')
+  assert.equal(
+    document.querySelector('meta[name="theme-color"]').getAttribute('content'),
+    '#E8DCC0',
+    'the Android status bar follows the theme'
+  )
+  await click('Dark')
+  await flush(2)
+  assert.equal(document.documentElement.dataset.theme, 'dark')
+})
+
+test('the Record shortcut instructions are reachable in one tap', async () => {
+  await click('Get the Record button on your home screen')
+  await flush(2)
+  assert.match(text(), /Press and hold the Quick Notes icon/)
+  assert.match(text(), /Drag that Record shortcut/)
+  await click('Close', { exact: false })
+  await flush(2)
+})
+
+test('/record falls back to the full-screen button when the mic is unavailable', async () => {
+  await go('#/record')
+  await flush(4)
+  // jsdom has no getUserMedia at all, which is the worst case.
+  assert.match(text(), /Cannot record|Tap = Record/, 'a single full-screen button, not a dead end')
+  assert.match(text(), /browser cannot record|microphone/i, 'and it says why in plain words')
+  assert.ok(button('Back to notes'), 'there is always a way out')
+})
+
+test('the record route takes over the whole screen — no bottom nav', async () => {
+  assert.equal(button('Buckets'), null, 'nothing to press by accident while capturing')
+})
+
+test('a backup exports readable JSON and imports back', async () => {
+  await go('#/settings')
+  await flush(2)
+  // Exercised directly: jsdom has no share sheet or download.
+  const { buildBackup, serializeBackup, parseBackup } = await import('../src/lib/backup.js')
+  const { getAll } = await import('../src/lib/db.js')
+  const [notes, buckets, grocery] = await Promise.all([
+    getAll('notes'),
+    getAll('buckets'),
+    getAll('grocery'),
+  ])
+  const json = serializeBackup(buildBackup({ notes, buckets, grocery, settings: {} }))
+  assert.match(json, /"bucket": "Grocery"/)
+  assert.match(json, /"text": "Milk"/)
+  const back = parseBackup(json)
+  assert.ok(back.notes.some((n) => n.transcript === 'Milk'))
+})
+
+test('nothing logged a console error the whole way through', () => {
+  assert.deepEqual(consoleErrors, [], `console errors:\n${consoleErrors.join('\n')}`)
+})

@@ -1,0 +1,27 @@
+{
+  "name": "quick-notes",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Quick Notes — Capture. File. Remember. Offline-first voice capture PWA.",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "node scripts/gen-icons.mjs && vite build",
+    "preview": "vite preview --host",
+    "icons": "node scripts/gen-icons.mjs",
+    "test": "node scripts/run-tests.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^5.0.4",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^30.0.1",
+    "tailwindcss": "^4.1.14",
+    "vite": "^7.1.9",
+    "vite-plugin-pwa": "^1.0.3"
+  }
+}
