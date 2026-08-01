@@ -22,3 +22,6 @@ Thumbs.db
 .env
 .env.local
 *.local
+
+# build contract + design references — kept locally, not published
+documents/
