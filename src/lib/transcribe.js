@@ -282,8 +282,41 @@ const noTranscription = {
 
 /* --------------------------------------------------------------- registry */
 
+/* ------------------------------------------------------- Whisper adapter */
+
+/**
+ * On-device Whisper. Not live — it reads the saved recording after the fact,
+ * which is the only thing that works on a phone that will not share the
+ * microphone (DECISIONS.md §11). The heavy lifting is dynamically imported so
+ * nothing here costs anything until it is actually used.
+ */
+const whisper = {
+  id: 'whisper',
+  label: 'On this phone (Whisper)',
+  live: false,
+  isSupported: () => {
+    if (typeof WebAssembly !== 'object') return false
+    return true
+  },
+  createSession() {
+    // Nothing to stream — the pass happens after Stop & Save.
+    return { start() {}, stop: () => '', text: '' }
+  },
+  async transcribeBlob(blob, opts = {}) {
+    const { transcribeWithWhisper } = await import('./whisper.js')
+    const result = await transcribeWithWhisper(blob, opts)
+    return result.text
+  },
+  /** Same pass, but returns the timing numbers the spike is judged on. */
+  async transcribeBlobDetailed(blob, opts = {}) {
+    const { transcribeWithWhisper } = await import('./whisper.js')
+    return transcribeWithWhisper(blob, opts)
+  },
+}
+
 export const TRANSCRIBERS = {
   [webSpeech.id]: webSpeech,
+  [whisper.id]: whisper,
   [noTranscription.id]: noTranscription,
 }
 

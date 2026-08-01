@@ -29,7 +29,13 @@ export default defineConfig({
       // Test the installed-PWA path (including the Record shortcut) with `npm run dev`.
       devOptions: { enabled: true, type: 'module', navigateFallback: 'index.html' },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
+        // The ORT binaries (~25 MB) and the transformers chunk are NOT
+        // precached: install must stay fast, and they are only needed if the
+        // user opts into on-device transcription. They are cached on first use
+        // by the browser instead.
+        globPatterns: ['**/*.{css,html,svg,png,ico,webmanifest}', 'assets/index-*.js'],
+        globIgnores: ['**/ort/**', '**/transformers*.js'],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
         clientsClaim: true,

@@ -22,6 +22,7 @@ import { Screen, ScreenHeader, ScreenBody } from '../components/Screen.jsx'
 import Sheet, { ConfirmSheet } from '../components/Sheet.jsx'
 import { StampLabel } from '../components/Stamp.jsx'
 import MicPanel from '../components/MicPanel.jsx'
+import WhisperPanel from '../components/WhisperPanel.jsx'
 import { APP_VERSION } from '../version.js'
 
 export default function Settings() {
@@ -282,6 +283,11 @@ export default function Settings() {
                   : 'Not available — your voice still records'
               }
             />
+          </Section>
+
+          {/* ---------------------------------------- writing notes up */}
+          <Section title="Writing notes up">
+            <WhisperPanel onToast={(msg, tone) => showToast(msg, { tone, ms: 3000 })} />
           </Section>
 
           {/* ------------------------------------------------ home screen */}

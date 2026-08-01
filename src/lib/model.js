@@ -137,6 +137,14 @@ export const DEFAULT_SETTINGS = {
    * measurably degrades the recording itself.
    */
   speechBlockedReason: null,
+
+  /**
+   * On-device Whisper (spike, 2026-08-01). Off until the model is downloaded
+   * on purpose — a 40 MB download is not something to spring on someone.
+   * The app is fully usable audio-only if this is never turned on.
+   */
+  whisperEnabled: false,
+  whisperModel: 'tiny',
   /** Offer to split a dictated line into separate checklist items (spec §8). */
   splitOnFile: true,
   /** Keep the screen awake while recording so a screen-off doesn't cut capture. */
@@ -181,8 +189,22 @@ export function newNote(fields = {}) {
     archived: false,
     audioKept: false,
     duration: 0,
+    /**
+     * Written-up-from-voice state. Lives on the note itself so the queue
+     * survives an app restart for free — there is no separate queue to lose.
+     *   null | 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+     */
+    transcribeState: null,
+    transcribeMs: 0,
     ...fields,
   }
+}
+
+/** Notes waiting to be written up: has audio, has no words yet. */
+export function needsTranscription(note) {
+  if (!note?.audioBlobId) return false
+  if ((note.transcript || '').trim()) return false
+  return note.transcribeState === 'pending' || note.transcribeState === 'running'
 }
 
 /** First-run inbox note: onboarding that teaches by being triaged (spec §12). */

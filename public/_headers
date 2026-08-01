@@ -1,0 +1,17 @@
+# Cross-origin isolation, needed for SharedArrayBuffer so on-device Whisper can
+# use threaded WASM. Normally this is a fight, because it blocks cross-origin
+# resources — but this app deliberately loads nothing external (no CDN, no web
+# fonts, no remote images), a choice made on day one for offline-first. So the
+# only cost is the model download, and `credentialless` lets that through
+# without credentials.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+
+# The model files are large, immutable and content-hashed by the browser cache.
+/models/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Build output is content-hashed, so it can be cached hard.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

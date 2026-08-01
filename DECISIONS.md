@@ -197,6 +197,33 @@ Two things beyond the headline:
 
 Next decision — transcription engine — is open. See the handover.
 
+## 12. On-device Whisper — spike build (2026-08-01)
+
+Chosen over a hosted API on privacy grounds: this app will hold other veterans' clinical voice notes, and "nothing leaves the phone" is a promise rather than a preference. Built behind `transcribeBlob()` so a failed spike costs nothing elsewhere.
+
+**Shape**
+
+- **Background job on saved notes.** Capture never waits — the note is written to IndexedDB with its audio *before* transcription is considered. A failure is never a lost note.
+- **The queue is note state, not a list.** `transcribeState` lives on the note (`pending` / `running` / `done` / `failed` / `skipped`), so an app restart or a kill mid-pass loses nothing: anything stuck in `running` at launch goes back to `pending` and resumes. There is no separate queue file to corrupt or lose.
+- **Never overwrites typed words.** If the user typed the note while the pass was running, the result is discarded (`skipped`).
+- **Opt-in, with the size stated up front.** ~42 MB (Small) or ~78 MB (Better). Declining, failing, or ignoring it leaves the app fully usable audio-only.
+- **Library and model both load on demand.** The transformers chunk is 549 kB and dynamically imported; it is *not* in the startup path and *not* precached by the service worker. Install stays at 21 entries / 373 KB.
+
+**Verification of the no-external-loads assumption — it did NOT hold, and is now fixed**
+
+Checking the built output as instructed turned up two things:
+
+1. The **main bundle and `index.html` are clean.** The only `http` strings are XML namespace identifiers (never fetched) and a React error-docs URL inside a message string.
+2. **transformers.js defaults its ONNX Runtime WASM binaries to `cdn.jsdelivr.net`.** That is a live third-party CDN dependency at transcription time — wrong for an offline-first app, and a silent failure for anyone whose network blocks it. Fixed by setting `env.backends.onnx.wasm.wasmPaths` to our own origin and shipping the binaries in `/ort/` (`scripts/copy-ort.mjs`). The jsDelivr string remains in the bundle as an unreachable fallback branch — it is guarded by `!wasmPaths`, which we set first.
+
+Because asserting that is worth less than being able to check it, the Whisper panel reports **where the runtime actually loaded from** after a run, in green when it is same-origin.
+
+**Deploy size is now the real cost: `dist/` is 39 MB**, of which 38 MB is the two ORT binaries (12.9 MB CPU + 26 MB WebGPU/JSEP). Vite additionally auto-emitted a 23.5 MB `asyncify` variant that this configuration never loads; `scripts/prune-dist.mjs` removes it, and that prune is only safe *because* `wasmPaths` is set — if that setting goes, the prune must go too.
+
+**Open question for after the numbers land:** if WebGPU turns out unavailable or no faster, dropping the JSEP binary takes the deploy from 39 MB to 13 MB. Worth doing before this ships to anyone else.
+
+**Go/no-go thresholds (set before measuring):** under ~2× realtime with readable accuracy → ship. Worse than ~3–4× realtime, or garbage accuracy → stop and report; hosted-with-proxy is only discussed after these numbers exist.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

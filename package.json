@@ -3,15 +3,17 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Quick Notes — Capture. File. Remember. Offline-first voice capture PWA.",
+  "description": "Quick Notes \u2014 Capture. File. Remember. Offline-first voice capture PWA.",
   "scripts": {
     "dev": "vite --host",
-    "build": "node scripts/gen-icons.mjs && vite build",
+    "build": "node scripts/gen-icons.mjs && node scripts/copy-ort.mjs && vite build && node scripts/prune-dist.mjs",
     "preview": "vite preview --host",
     "icons": "node scripts/gen-icons.mjs",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "ort": "node scripts/copy-ort.mjs"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

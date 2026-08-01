@@ -26,6 +26,7 @@ import {
   uid,
 } from './model.js'
 import { buildBackup, parseBackup } from './backup.js'
+import { TRANSCRIBERS } from './transcribe.js'
 
 const StoreContext = createContext(null)
 
@@ -236,6 +237,8 @@ export function StoreProvider({ children }) {
         createdAt: note.createdAt,
       })
       note.audioBlobId = audioId
+      // Queue it for writing up. Capture does not wait for this.
+      if (!note.transcript) note.transcribeState = 'pending'
     }
     await db.put('notes', note)
     writeNotes((cur) => [...cur, note])
@@ -607,6 +610,94 @@ export function StoreProvider({ children }) {
     setSettings(restored)
   }, [])
 
+  /* ------------------------------------------ background transcription */
+
+  /**
+   * Writes saved notes up from their recordings, one at a time, in the
+   * background (DECISIONS.md §12).
+   *
+   * Rules this exists to keep:
+   *   - capture NEVER waits on it; the note is already saved before it starts
+   *   - a failure is never a lost note; the audio is untouched either way
+   *   - the queue is note state, not a separate list, so an app restart or a
+   *     kill mid-pass loses nothing and resumes on its own
+   */
+  const queueRunning = useRef(false)
+  const [transcribing, setTranscribing] = useState(null)
+
+  const runTranscriptionQueue = useCallback(async () => {
+    if (queueRunning.current) return
+    const cfg = settingsRef.current
+    if (!cfg.whisperEnabled) return
+
+    queueRunning.current = true
+    try {
+      for (;;) {
+        const next = notesRef.current.find(
+          (n) =>
+            n.audioBlobId &&
+            !(n.transcript || '').trim() &&
+            (n.transcribeState === 'pending' || n.transcribeState === 'running')
+        )
+        if (!next) break
+        if (!settingsRef.current.whisperEnabled) break
+
+        setTranscribing({ id: next.id })
+        await patchNote(next.id, { transcribeState: 'running' })
+
+        try {
+          const row = await db.get('audio', next.audioBlobId)
+          if (!row?.blob) throw new Error('recording missing')
+
+          const { transcribeBlobDetailed } = TRANSCRIBERS.whisper
+          const result = await transcribeBlobDetailed(row.blob, {
+            modelId: settingsRef.current.whisperModel,
+          })
+
+          // Never overwrite words the user typed while this was running.
+          const current = notesRef.current.find((n) => n.id === next.id)
+          if (!current) continue
+          if ((current.transcript || '').trim()) {
+            await patchNote(next.id, { transcribeState: 'skipped' })
+          } else if (result.text) {
+            await patchNote(next.id, {
+              transcript: result.text,
+              transcribeState: 'done',
+              transcribeMs: result.tookMs,
+            })
+          } else {
+            await patchNote(next.id, { transcribeState: 'failed' })
+          }
+        } catch (err) {
+          console.warn('[quick-notes] transcription failed', err)
+          await patchNote(next.id, { transcribeState: 'failed' })
+        }
+      }
+    } finally {
+      queueRunning.current = false
+      setTranscribing(null)
+    }
+  }, [patchNote])
+
+  /** Puts a note (back) in the queue. Used on capture and on manual retry. */
+  const enqueueTranscription = useCallback(
+    async (noteId) => {
+      await patchNote(noteId, { transcribeState: 'pending' })
+      runTranscriptionQueue()
+    },
+    [patchNote, runTranscriptionQueue]
+  )
+
+  // Resume on launch: anything left 'running' when the app died goes back to
+  // 'pending' and the queue picks it up.
+  useEffect(() => {
+    if (!ready || !settings.whisperEnabled) return
+    const stuck = notesRef.current.filter((n) => n.transcribeState === 'running')
+    Promise.all(stuck.map((n) => patchNote(n.id, { transcribeState: 'pending' }))).then(() =>
+      runTranscriptionQueue()
+    )
+  }, [ready, settings.whisperEnabled, patchNote, runTranscriptionQueue])
+
   /* ------------------------------------------------------------ lifecycle */
 
   useEffect(() => {
@@ -694,6 +785,9 @@ export function StoreProvider({ children }) {
     importData,
     eraseEverything,
     getBucket,
+    transcribing,
+    enqueueTranscription,
+    runTranscriptionQueue,
   }
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
