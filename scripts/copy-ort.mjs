@@ -13,7 +13,7 @@
  * this configuration and would add ~28 MB to the deploy for nothing.
  */
 
-import { copyFileSync, mkdirSync, existsSync, statSync } from 'node:fs'
+import { copyFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,18 +22,22 @@ const from = join(root, 'node_modules', 'onnxruntime-web', 'dist')
 const to = join(root, 'public', 'ort')
 
 /**
- * BOTH halves are required. ORT fetches a `.mjs` loader from `wasmPaths` and
- * that loader instantiates the matching `.wasm`. Shipping only the binaries
- * gives a 404 on the loader and ORT reports "no available backend found",
- * which does not point at the missing file at all. Verified on the live site:
- * the .wasm returned 200 and the .mjs returned 404.
+ * Copy EVERY ort-wasm-* file, both halves of each variant.
+ *
+ * Twice now I have reasoned about which variants the runtime "actually needs"
+ * and been wrong, costing a deploy cycle each time:
+ *
+ *   1. Shipped only the .wasm binaries. ORT fetches a .mjs loader first and
+ *      instantiates the .wasm from there — the loader 404'd and ORT reported
+ *      "no available backend found", naming neither the file nor the 404.
+ *   2. Shipped the plain + jsep pairs and pruned "asyncify" as unused. The
+ *      WebGPU path requests exactly that: asyncify.mjs.
+ *
+ * The variants are selected at runtime from device capabilities we cannot see
+ * from here, so guessing is the wrong tool. Copy them all; trim only once the
+ * device has told us which backend actually wins.
  */
-const WANTED = [
-  'ort-wasm-simd-threaded.mjs',
-  'ort-wasm-simd-threaded.wasm',
-  'ort-wasm-simd-threaded.jsep.mjs',
-  'ort-wasm-simd-threaded.jsep.wasm',
-]
+const WANTED = null // null = every ort-wasm-* file present
 
 if (!existsSync(from)) {
   console.error('onnxruntime-web not installed — run npm install first')
@@ -41,8 +45,18 @@ if (!existsSync(from)) {
 }
 
 mkdirSync(to, { recursive: true })
+
+const files =
+  WANTED ||
+  readdirSync(from).filter((n) => /^ort-wasm.*\.(mjs|wasm)$/.test(n))
+
+if (!files.length) {
+  console.error('no ort-wasm-* files found — onnxruntime-web layout may have changed')
+  process.exit(1)
+}
+
 let total = 0
-for (const name of WANTED) {
+for (const name of files) {
   const src = join(from, name)
   if (!existsSync(src)) {
     console.error(`missing ${name} — onnxruntime-web layout may have changed`)
@@ -53,4 +67,4 @@ for (const name of WANTED) {
   total += mb
   process.stdout.write(`  ort/${name}  ${mb.toFixed(1)} MB\n`)
 }
-process.stdout.write(`  ${total.toFixed(1)} MB served from our own origin\n`)
+process.stdout.write(`  ${files.length} files · ${total.toFixed(1)} MB served from our own origin\n`)

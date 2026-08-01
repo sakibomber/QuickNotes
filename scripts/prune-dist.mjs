@@ -1,15 +1,21 @@
 /**
- * Drops build output we provably never load.
+ * Drops Vite's duplicate copies of the ORT binaries from assets/.
  *
- * transformers.js contains a static asset reference to the ORT "asyncify"
- * WASM build, so Vite emits it (~23.5 MB) even though this app never enables
- * asyncify or JSPI — it uses the plain SIMD+threaded build for CPU and the
- * JSEP build for WebGPU, both served from /ort/ via env.backends.onnx.wasm.
- * wasmPaths.
+ * Vite sees static asset references inside transformers.js and emits its own
+ * hashed copies (~23.5 MB) into assets/. Those copies are never fetched: we
+ * set env.backends.onnx.wasm.wasmPaths to /ort/, and ORT builds every request
+ * from that prefix. The device confirmed it directly — a failed load asked for
  *
- * Removing it is safe *because* wasmPaths is set: ORT resolves its binaries
- * from /ort/ and never asks for the emitted asset. If that setting is ever
- * removed, this prune must go too.
+ *   https://quicknotes-kk.netlify.app/ort/ort-wasm-simd-threaded.asyncify.mjs
+ *
+ * i.e. /ort/, never /assets/. So pruning the assets duplicates is safe, and
+ * that is now observed rather than assumed.
+ *
+ * NOTE: this prunes only the assets/ duplicates. The real files live in /ort/
+ * and are copied there by copy-ort.mjs. An earlier version of this script
+ * treated "asyncify" as an unused variant and dropped it everywhere, which
+ * broke WebGPU — the WebGPU path requests exactly that variant. If wasmPaths
+ * is ever unset, this prune must go too.
  */
 
 import { readdirSync, rmSync, statSync } from 'node:fs'

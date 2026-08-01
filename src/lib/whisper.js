@@ -102,30 +102,52 @@ export async function loadWhisper(modelId = 'tiny', { onProgress } = {}) {
     // anyone whose network blocks it. `scripts/copy-ort.mjs` puts them there.
     env.backends.onnx.wasm.wasmPaths = new URL('./ort/', document.baseURI).href
 
-    const device = (await hasWebGPU()) ? 'webgpu' : 'wasm'
-    loadedBackend = device
-
     const seen = new Map()
-    const pipe = await pipeline('automatic-speech-recognition', model.repo, {
-      device,
-      dtype: device === 'webgpu' ? 'fp32' : 'q8',
-      progress_callback: (info) => {
-        if (info?.status === 'progress' && info.file) {
-          seen.set(info.file, info.loaded || 0)
-          downloadedBytes = [...seen.values()].reduce((a, b) => a + b, 0)
-          const total = info.total ? info.total : 0
-          onProgress?.({
-            phase: 'downloading',
-            file: info.file,
-            bytes: downloadedBytes,
-            pct: total ? Math.min(100, Math.round((info.loaded / total) * 100)) : null,
-          })
-        } else if (info?.status === 'ready') {
-          onProgress?.({ phase: 'ready', bytes: downloadedBytes })
-        }
-      },
-    })
-    return pipe
+    const progress_callback = (info) => {
+      if (info?.status === 'progress' && info.file) {
+        seen.set(info.file, info.loaded || 0)
+        downloadedBytes = [...seen.values()].reduce((a, b) => a + b, 0)
+        const total = info.total ? info.total : 0
+        onProgress?.({
+          phase: 'downloading',
+          file: info.file,
+          bytes: downloadedBytes,
+          pct: total ? Math.min(100, Math.round((info.loaded / total) * 100)) : null,
+        })
+      } else if (info?.status === 'ready') {
+        onProgress?.({ phase: 'ready', bytes: downloadedBytes })
+      }
+    }
+
+    /**
+     * Try WebGPU, fall back to CPU.
+     *
+     * WebGPU is worth having — it is the difference between a usable wait and
+     * an unusable one — but it pulls in a different WASM variant and a whole
+     * separate driver path. Any failure there must degrade to CPU rather than
+     * take the feature down with it, which is exactly what happened on the
+     * S23: one missing WebGPU asset killed transcription outright instead of
+     * quietly running slower.
+     */
+    const devices = (await hasWebGPU()) ? ['webgpu', 'wasm'] : ['wasm']
+    let lastError = null
+
+    for (const device of devices) {
+      try {
+        const pipe = await pipeline('automatic-speech-recognition', model.repo, {
+          device,
+          dtype: device === 'webgpu' ? 'fp32' : 'q8',
+          progress_callback,
+        })
+        loadedBackend = device
+        return pipe
+      } catch (err) {
+        lastError = err
+        console.warn(`[quick-notes] ${device} backend failed, trying next`, err)
+        onProgress?.({ phase: 'falling-back', from: device, bytes: downloadedBytes })
+      }
+    }
+    throw lastError || new Error('No backend could be started.')
   })()
 
   try {
