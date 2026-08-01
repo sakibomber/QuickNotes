@@ -187,7 +187,9 @@ The sweep came back 0 for 4 on the S23 Ultra:
 Two things beyond the headline:
 
 - **Raw audio breaks the recording on this device**, not just the transcript. It is not a safe fallback here. This is only visible because a combination has to prove *both* streams survived; a speech-only pass criterion would have called raw a candidate.
-- **Order does not matter.** Speech-first got a 400 ms head start and still heard nothing, while *costing* recorder quality (peak 27% vs 100%). So this is not first-come-first-served: once any `getUserMedia` stream is live in the process, the Android speech service is starved regardless. That closes the axis — there is no ordering or constraint combination left to try.
+- **Order does not matter.** Speech-first got a 400 ms head start and still heard nothing. So this is not first-come-first-served: once any `getUserMedia` stream is live in the process, the Android speech service is starved regardless. That closes the axis — there is no ordering or constraint combination left to try.
+
+> **Correction (second run, 12:11).** The first write-up said speech-first also *cost* recorder quality, citing peak 27% vs 100%. A repeat run showed 100% for that same combination, so the 27% was sample noise and the claim was drawn from n=1. Withdrawn. Everything else reproduced exactly, including all four sweep failures — the contention finding itself is stable.
 
 **Live transcription is therefore impossible on this handset**, and Web Speech cannot be handed an existing `MediaStream` (no such API), so there is no way to feed one stream to both.
 
