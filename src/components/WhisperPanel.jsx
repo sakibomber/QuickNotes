@@ -15,6 +15,8 @@ import {
   FORMAT_LIST,
   WHISPER_MODELS,
   approxDownloadMB,
+  clearModelCache,
+  lastLoadAttempts,
   hasWebGPU,
   loadWhisper,
   loadedModel,
@@ -22,6 +24,7 @@ import {
 } from '../lib/whisper.js'
 import { TRANSCRIBERS } from '../lib/transcribe.js'
 import { bytes } from '../lib/format.js'
+import { copyText } from '../lib/text.js'
 import Icon from './Icon.jsx'
 import Button, { Segmented } from './Button.jsx'
 import { useStore } from '../lib/store.jsx'
@@ -65,7 +68,7 @@ export default function WhisperPanel({ onToast }) {
       await loadWhisper(settings.whisperModel, {
         onProgress: (p) => {
           if (p.phase === 'falling-back') {
-            setAttempts((a) => [...a, { label: p.fromLabel, reason: p.reason }])
+            setAttempts((a) => [...a, { label: p.fromLabel, reason: p.reason, files: p.files }])
           }
           setProgress(p)
         },
@@ -150,6 +153,27 @@ export default function WhisperPanel({ onToast }) {
         <p className="mt-2 px-1 text-[0.8rem] leading-snug text-muted">{model.blurb}</p>
       </div>
 
+      <Button
+        variant="quiet"
+        full
+        icon="trash"
+        onClick={async () => {
+          const { unloadWhisper } = await import('../lib/whisper.js')
+          await unloadWhisper()
+          const removed = await clearModelCache()
+          setReady(false)
+          setAttempts([])
+          setErrorText(null)
+          await setSetting('whisperEnabled', false)
+          onToast?.(
+            removed.length ? 'Downloaded model cleared' : 'Nothing was cached',
+            'good'
+          )
+        }}
+      >
+        Delete the downloaded model and start over
+      </Button>
+
       <div>
         <div className="mb-2 px-1 text-[0.85rem] text-muted">Format</div>
         <Segmented
@@ -200,10 +224,44 @@ export default function WhisperPanel({ onToast }) {
           <ul className="mt-1.5 space-y-1">
             {attempts.map((a, i) => (
               <li key={i} className="font-mono text-[0.7rem] leading-snug break-words text-muted">
-                {a.label}: {a.reason}
+                <span className="text-ink">{a.label}</span>
+                {a.files?.length ? (
+                  <span className="block">files: {a.files.join(', ')}</span>
+                ) : (
+                  <span className="block">files: (none fetched — served from cache?)</span>
+                )}
+                <span className="block">{a.reason}</span>
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {attempts.length > 0 && (
+        <div className="space-y-2.5">
+          <Button
+            variant="quiet"
+            full
+            icon="copy"
+            onClick={async () => {
+              const log = lastLoadAttempts()
+                .map((a) =>
+                  [
+                    `[${a.ok ? 'OK' : 'FAIL'}] ${a.label} on ${a.device}`,
+                    `  asked for: ${JSON.stringify(a.dtype)}`,
+                    `  files fetched: ${a.files.length ? a.files.join(', ') : '(none — served from cache?)'}`,
+                    ...(a.reason ? [`  error: ${a.reason}`] : []),
+                  ].join('\n')
+                )
+                .join('\n\n')
+              const ok = await copyText(
+                ['Quick Notes — model load attempts', navigator.userAgent, '', log].join('\n')
+              )
+              onToast?.(ok ? 'Copied the load log' : 'Could not copy', ok ? 'good' : undefined)
+            }}
+          >
+            Copy what it tried
+          </Button>
         </div>
       )}
 

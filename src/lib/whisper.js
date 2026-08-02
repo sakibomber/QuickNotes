@@ -34,21 +34,21 @@ export const FORMATS = {
   balanced: {
     id: 'balanced',
     label: 'Balanced',
-    approxMB: 42,
+    simple: 'q8',
     blurb: '8-bit. Works on the CPU. Start here.',
     dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' },
   },
   original: {
     id: 'original',
     label: 'Original',
-    approxMB: 155,
+    simple: 'fp32',
     blurb: 'Full precision. Biggest download, but the most likely to run anywhere.',
     dtype: { encoder_model: 'fp32', decoder_model_merged: 'fp32' },
   },
   smallest: {
     id: 'smallest',
     label: 'Smallest',
-    approxMB: 28,
+    simple: 'q4',
     blurb: '4-bit. Needs the graphics chip — will not create a session on the CPU.',
     dtype: { encoder_model: 'q4', decoder_model_merged: 'q4' },
   },
@@ -57,11 +57,57 @@ export const FORMATS = {
 export const FORMAT_LIST = Object.values(FORMATS)
 
 /**
- * What to try, in order, when a session will not create. Balanced first
- * because it is small and CPU-safe; Original last because it always works but
- * costs a much larger download.
+ * The attempt ladder.
+ *
+ * Every format — including fp32 — failed with the same MatMulNBits error, and
+ * fp32 cannot produce that: MatMulNBits is 4-bit only. So the dtype was not
+ * reaching file resolution, and something 4-bit was being loaded regardless of
+ * what was asked for. Two candidates:
+ *
+ *   a) the per-module keys are wrong, so the map is ignored and the repo's
+ *      default (q4) is used for the decoder
+ *   b) a cached artifact is returned regardless of the request
+ *
+ * The ladder now tries the per-module map AND the plain-string form, which
+ * tells (a) apart from (b): if the string form works, the keys were wrong; if
+ * both fail identically on a cleared cache, it is not the keys.
  */
-const FORMAT_LADDER = ['balanced', 'original']
+function attemptsFor(formatId) {
+  const fmt = FORMATS[formatId] || FORMATS.balanced
+  const rungs = [
+    { label: `${fmt.label} · per-module`, dtype: fmt.dtype },
+    { label: `${fmt.label} · whole model`, dtype: fmt.simple },
+    { label: 'Original · whole model', dtype: 'fp32' },
+  ]
+  const seen = new Set()
+  return rungs.filter((r) => {
+    const key = JSON.stringify(r.dtype)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+/**
+ * Deletes every cached model file. transformers.js caches by URL in Cache
+ * Storage, so a bad artifact survives reloads and every retry returns it —
+ * which is indistinguishable from "the setting does nothing".
+ */
+export async function clearModelCache() {
+  const removed = []
+  try {
+    if (!globalThis.caches?.keys) return removed
+    for (const name of await caches.keys()) {
+      if (/transformers|onnx|huggingface|hf/i.test(name)) {
+        await caches.delete(name)
+        removed.push(name)
+      }
+    }
+  } catch (err) {
+    console.warn('[quick-notes] could not clear the model cache', err)
+  }
+  return removed
+}
 
 const MODELS = {
   tiny: {
@@ -96,6 +142,8 @@ let loadedBackend = null
 let loadedRequest = null
 let loadedFormat = null
 let downloadedBytes = 0
+/** Per-attempt record: which dtype was asked for, and which files came down. */
+let loadAttempts = []
 
 /**
  * Hard ceiling on one transcription, as a multiple of the audio length.
@@ -133,6 +181,10 @@ export async function hasWebGPU() {
   } catch {
     return false
   }
+}
+
+export function lastLoadAttempts() {
+  return loadAttempts
 }
 
 export function loadedModel() {
@@ -191,7 +243,12 @@ export async function loadWhisper(
     env.backends.onnx.wasm.wasmPaths = new URL('./ort/', document.baseURI).href
 
     const seen = new Map()
+    // Exact filenames fetched during the current attempt. This is the evidence
+    // that says whether the dtype reached file resolution at all: asking for
+    // fp32 and seeing *_q4.onnx come down names the bug outright.
+    let filesThisAttempt = new Set()
     const progress_callback = (info) => {
+      if (info?.file) filesThisAttempt.add(info.file)
       if (info?.status === 'progress' && info.file) {
         seen.set(info.file, info.loaded || 0)
         downloadedBytes = [...seen.values()].reduce((a, b) => a + b, 0)
@@ -206,6 +263,9 @@ export async function loadWhisper(
         onProgress?.({ phase: 'ready', bytes: downloadedBytes })
       }
     }
+
+    /** Only the .onnx weights matter here; configs and tokenizers are noise. */
+    const onnxFiles = () => [...filesThisAttempt].filter((f) => /\.onnx/i.test(f))
 
     /**
      * Try WebGPU, fall back to CPU.
@@ -228,33 +288,53 @@ export async function loadWhisper(
     const devices =
       backend === 'auto' && (await hasWebGPU()) ? ['webgpu', 'wasm'] : ['wasm']
 
-    // Requested format first, then the ladder — so an explicit choice is
-    // honoured, but a session that will not create still finds a way through
-    // instead of dead-ending on a wall of ONNX internals.
-    const formatIds = [format, ...FORMAT_LADDER.filter((f) => f !== format)]
+    const rungs = attemptsFor(format)
     let lastError = null
+    loadAttempts = []
 
     for (const device of devices) {
-      for (const formatId of formatIds) {
-        const fmt = FORMATS[formatId] || FORMATS.balanced
-        onProgress?.({ phase: 'trying', device, format: fmt.id, label: fmt.label })
+      for (const rung of rungs) {
+        // Hard cache-clear before every attempt. transformers.js caches by URL
+        // in Cache Storage, so without this a bad artifact is handed back on
+        // every retry and no dtype change can ever appear to take effect.
+        const cleared = await clearModelCache()
+        filesThisAttempt = new Set()
+        onProgress?.({ phase: 'trying', device, label: rung.label, cleared: cleared.length })
+
         try {
           const pipe = await pipeline('automatic-speech-recognition', model.repo, {
             device,
-            dtype: fmt.dtype,
+            dtype: rung.dtype,
             progress_callback,
           })
           loadedBackend = device
-          loadedFormat = fmt.id
+          loadedFormat = rung.label
+          loadAttempts.push({
+            label: rung.label,
+            device,
+            dtype: rung.dtype,
+            files: onnxFiles(),
+            ok: true,
+          })
           return pipe
         } catch (err) {
           lastError = err
-          console.warn(`[quick-notes] ${device}/${fmt.id} failed, trying next`, err)
+          const files = onnxFiles()
+          console.warn(`[quick-notes] ${device} / ${rung.label} failed`, { files, err })
+          loadAttempts.push({
+            label: rung.label,
+            device,
+            dtype: rung.dtype,
+            files,
+            ok: false,
+            reason: String(err?.message || err),
+          })
           onProgress?.({
             phase: 'falling-back',
-            from: `${device}/${fmt.id}`,
-            fromLabel: fmt.label,
-            reason: String(err?.message || err).slice(0, 200),
+            from: `${device} / ${rung.label}`,
+            fromLabel: rung.label,
+            files,
+            reason: String(err?.message || err).slice(0, 240),
             bytes: downloadedBytes,
           })
         }

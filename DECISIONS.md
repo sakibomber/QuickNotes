@@ -291,6 +291,30 @@ The switch was working. 42 MB (Balanced attempt) + ~155 MB (Original fallback) �
 
 Still open: **why** Balanced (8-bit) will not create a session on this phone. It is now visible rather than inferred from a byte count, which is the prerequisite for fixing it.
 
+## 18. Every format failing identically — instrumenting the load (2026-08-01)
+
+Nav gutter, swipe dead zone and Cancel all confirmed fixed on device. One thing left, and the ladder announcements are what exposed it: **every format fails with the same error**, including fp32:
+
+```
+qdq_actions.cc:137 TransposeDQWeightsForMatMulNBits
+Missing required scale: model.decoder.embed_tokens.weight_merged_0_scale
+```
+
+**fp32 cannot produce a MatMulNBits error** — MatMulNBits is 4-bit only. So the requested dtype is not reaching file resolution, and something 4-bit is loaded no matter what is asked for. Two candidates:
+
+- **(a)** the per-module keys (`encoder_model` / `decoder_model_merged`) are wrong, so the map is ignored and the repo default is used for the decoder
+- **(b)** a cached artifact is returned regardless of the request
+
+Rather than guess between them — the mistake that cost three deploy cycles on the ORT variants — the load is now instrumented to say which:
+
+1. **Exact filenames are recorded per attempt** from the progress callback and shown in the UI. Asking for fp32 and seeing `*_q4.onnx` come down names the bug outright; seeing **no files fetched at all** names it as cache.
+2. **Hard cache-clear before every attempt.** transformers.js caches by URL in Cache Storage, so a bad artifact survives reloads and is handed back on every retry — indistinguishable from "the setting does nothing". Clearing between rungs removes (b) as a confound.
+3. **The ladder now tries both dtype forms** — the per-module map *and* the plain string. This is the discriminator: if the string form works, the keys were wrong (a); if both fail identically on a cleared cache, the keys are not the problem.
+4. **"Delete the downloaded model and start over"** in Settings, so a poisoned cache is recoverable without reinstalling.
+5. **"Copy what it tried"** dumps every attempt with its requested dtype, the files fetched, and the error.
+
+The next report should name the cause rather than requiring another round of inference.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype
