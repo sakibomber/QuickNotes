@@ -38,6 +38,7 @@ define('MutationObserver', win.MutationObserver)
 define('requestAnimationFrame', win.requestAnimationFrame.bind(win))
 define('cancelAnimationFrame', win.cancelAnimationFrame.bind(win))
 define('localStorage', win.localStorage)
+define('getComputedStyle', win.getComputedStyle.bind(win))
 define('IS_REACT_ACT_ENVIRONMENT', true)
 
 // jsdom has no object URLs, no media and no clipboard.
@@ -414,6 +415,76 @@ test('/record falls back to the full-screen button when the mic is unavailable',
   assert.match(text(), /Cannot record|Tap = Record/, 'a single full-screen button, not a dead end')
   assert.match(text(), /browser cannot record|microphone/i, 'and it says why in plain words')
   assert.ok(button('Back to notes'), 'there is always a way out')
+})
+
+test('a sheet survives its parent re-rendering repeatedly', async () => {
+  /**
+   * The device bug tests missed: Sheet's back-button effect listed `onClose` in
+   * its deps, callers pass inline arrows, and the recording screen re-renders
+   * five times a second from its timer. Cleanup ran on every tick —
+   * history.back() fired popstate, popstate called onClose — so the confirm
+   * dialog appeared and vanished instantly and Cancel never happened.
+   *
+   * This drives the same shape directly: open a sheet, force many parent
+   * re-renders with a fresh onClose identity each time, and require it to still
+   * be open afterwards.
+   */
+  const { default: Sheet } = await import('../src/components/Sheet.jsx')
+  const holder = document.createElement('div')
+  document.body.appendChild(holder)
+  const sheetRoot = createRoot(holder)
+
+  // Count history churn rather than waiting for a close. jsdom's back()/popstate
+  // does not emulate the browser closely enough to reproduce the visible
+  // symptom, but the CAUSE is exact and directly observable: with `onClose` in
+  // the effect deps, the effect tears down and re-runs on every render, so
+  // pushState fires once per render instead of once per open.
+  const realPush = win.history.pushState.bind(win.history)
+  let pushes = 0
+  win.history.pushState = (...args) => {
+    pushes++
+    return realPush(...args)
+  }
+
+  let renders = 0
+  function Harness() {
+    // The PARENT owns `open` and closes on onClose — as Record does. Without
+    // that the sheet can never close and the test passes on broken code, which
+    // is exactly the mistake that let this ship.
+    const [open, setOpen] = React.useState(true)
+    const [, force] = React.useState(0)
+    renders++
+    React.useEffect(() => {
+      if (renders < 12) force((n) => n + 1)
+    })
+    // New identity every render, exactly as the record screen does it.
+    return (
+      <Sheet open={open} onClose={() => setOpen(false)} title="Throw this away?">
+        <p>body</p>
+      </Sheet>
+    )
+  }
+
+  await act(async () => {
+    sheetRoot.render(<Harness />)
+  })
+  await flush(3)
+
+  win.history.pushState = realPush
+
+  assert.ok(renders >= 12, 'the parent really did re-render repeatedly')
+  assert.match(holder.textContent || '', /Throw this away\?/, 'the sheet is still open')
+  assert.equal(
+    pushes,
+    1,
+    `the sheet pushed history ${pushes} times across ${renders} renders — it must be exactly 1, ` +
+      'or the back-button effect is thrashing and will slam the sheet shut on a real device'
+  )
+
+  await act(async () => {
+    sheetRoot.unmount()
+  })
+  holder.remove()
 })
 
 test('the record route takes over the whole screen — no bottom nav', async () => {

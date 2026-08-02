@@ -306,6 +306,71 @@ export async function findMicCombination({ onStep } = {}) {
   return results
 }
 
+/* ------------------------------------------------------------------------ */
+
+/**
+ * What the device actually reports about the viewport and the safe areas.
+ *
+ * Built because "the nav bar is behind the system buttons" could not be
+ * diagnosed from here: the CSS and the meta tag were both present and correct
+ * in the deployed build, so the question was never "did it ship" but "what
+ * does the device say the insets are". Now it can answer.
+ */
+export function screenReport() {
+  // Wrapped defensively: this is a diagnostic, and a diagnostic that can crash
+  // the Settings screen is worse than no diagnostic at all.
+  try {
+    return measureScreen()
+  } catch (err) {
+    return { error: String(err?.message || err) }
+  }
+}
+
+function measureScreen() {
+  const probe = document.createElement('div')
+  probe.style.cssText = [
+    'position:fixed',
+    'left:0',
+    'top:0',
+    'width:0',
+    'height:0',
+    'visibility:hidden',
+    'pointer-events:none',
+    'padding-top:env(safe-area-inset-top,0px)',
+    'padding-right:env(safe-area-inset-right,0px)',
+    'padding-bottom:env(safe-area-inset-bottom,0px)',
+    'padding-left:env(safe-area-inset-left,0px)',
+  ].join(';')
+  document.body.appendChild(probe)
+  const cs = getComputedStyle(probe)
+  const insets = {
+    top: cs.paddingTop,
+    right: cs.paddingRight,
+    bottom: cs.paddingBottom,
+    left: cs.paddingLeft,
+  }
+  probe.remove()
+
+  const meta = document.querySelector('meta[name="viewport"]')?.getAttribute('content') || ''
+
+  return {
+    insets,
+    viewportFitCover: /viewport-fit\s*=\s*cover/.test(meta),
+    innerHeight: window.innerHeight,
+    clientHeight: document.documentElement.clientHeight,
+    visualViewport: window.visualViewport
+      ? Math.round(window.visualViewport.height)
+      : null,
+    dpr: window.devicePixelRatio,
+    standalone: isStandalone(),
+    // If this is bigger than a hairline, something is being cut off below.
+    lostBelow:
+      window.visualViewport && window.innerHeight
+        ? Math.round(window.innerHeight - window.visualViewport.height)
+        : null,
+  }
+}
+
 /**
  * Asks for the microphone from inside a user gesture. This is the call that has
  * to happen on a tap in the installed app — a WebAPK is a separate Android

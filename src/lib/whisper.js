@@ -17,6 +17,52 @@
  * Capture must not pay for a feature it does not use.
  */
 
+/**
+ * Weight formats, and why this is a ladder rather than a constant.
+ *
+ * The S23 failed to create a CPU session with:
+ *   qdq_actions.cc TransposeDQWeightsForMatMulNBits — missing required scale
+ *   for model.decoder.embed_tokens.weight_transposed_DequantizeLinear
+ *
+ * MatMulNBits is 4-bit, so a q4 tensor reached the WASM execution provider,
+ * which cannot handle it — q4 is effectively WebGPU-only. Asking for 'q8' as a
+ * bare string did not prevent that, so the format is now pinned per module.
+ *
+ * Sizes are for the Small model; Better is roughly double.
+ */
+export const FORMATS = {
+  balanced: {
+    id: 'balanced',
+    label: 'Balanced',
+    approxMB: 42,
+    blurb: '8-bit. Works on the CPU. Start here.',
+    dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' },
+  },
+  original: {
+    id: 'original',
+    label: 'Original',
+    approxMB: 155,
+    blurb: 'Full precision. Biggest download, but the most likely to run anywhere.',
+    dtype: { encoder_model: 'fp32', decoder_model_merged: 'fp32' },
+  },
+  smallest: {
+    id: 'smallest',
+    label: 'Smallest',
+    approxMB: 28,
+    blurb: '4-bit. Needs the graphics chip — will not create a session on the CPU.',
+    dtype: { encoder_model: 'q4', decoder_model_merged: 'q4' },
+  },
+}
+
+export const FORMAT_LIST = Object.values(FORMATS)
+
+/**
+ * What to try, in order, when a session will not create. Balanced first
+ * because it is small and CPU-safe; Original last because it always works but
+ * costs a much larger download.
+ */
+const FORMAT_LADDER = ['balanced', 'original']
+
 const MODELS = {
   tiny: {
     id: 'tiny',
@@ -40,6 +86,7 @@ let pipelinePromise = null
 let loadedModelId = null
 let loadedBackend = null
 let loadedRequest = null
+let loadedFormat = null
 let downloadedBytes = 0
 
 /**
@@ -81,7 +128,9 @@ export async function hasWebGPU() {
 }
 
 export function loadedModel() {
-  return loadedModelId ? { id: loadedModelId, backend: loadedBackend, bytes: downloadedBytes } : null
+  return loadedModelId
+    ? { id: loadedModelId, backend: loadedBackend, format: loadedFormat, bytes: downloadedBytes }
+    : null
 }
 
 /**
@@ -105,14 +154,18 @@ export async function wasmSource() {
  * Loads the model, reporting progress so the download never looks like a hang.
  * Resolves to a transcription pipeline. Safe to call repeatedly.
  */
-export async function loadWhisper(modelId = 'tiny', { onProgress, backend = 'wasm' } = {}) {
-  if (pipelinePromise && loadedModelId === modelId && loadedRequest === backend) {
+export async function loadWhisper(
+  modelId = 'tiny',
+  { onProgress, backend = 'wasm', format = 'balanced' } = {}
+) {
+  const key = `${backend}:${format}`
+  if (pipelinePromise && loadedModelId === modelId && loadedRequest === key) {
     return pipelinePromise
   }
 
   const model = MODELS[modelId] || MODELS.tiny
   loadedModelId = modelId
-  loadedRequest = backend
+  loadedRequest = key
   downloadedBytes = 0
 
   pipelinePromise = (async () => {
@@ -166,21 +219,34 @@ export async function loadWhisper(modelId = 'tiny', { onProgress, backend = 'was
      */
     const devices =
       backend === 'auto' && (await hasWebGPU()) ? ['webgpu', 'wasm'] : ['wasm']
+
+    // Requested format first, then the ladder — so an explicit choice is
+    // honoured, but a session that will not create still finds a way through
+    // instead of dead-ending on a wall of ONNX internals.
+    const formatIds = [format, ...FORMAT_LADDER.filter((f) => f !== format)]
     let lastError = null
 
     for (const device of devices) {
-      try {
-        const pipe = await pipeline('automatic-speech-recognition', model.repo, {
-          device,
-          dtype: device === 'webgpu' ? 'fp32' : 'q8',
-          progress_callback,
-        })
-        loadedBackend = device
-        return pipe
-      } catch (err) {
-        lastError = err
-        console.warn(`[quick-notes] ${device} backend failed, trying next`, err)
-        onProgress?.({ phase: 'falling-back', from: device, bytes: downloadedBytes })
+      for (const formatId of formatIds) {
+        const fmt = FORMATS[formatId] || FORMATS.balanced
+        try {
+          const pipe = await pipeline('automatic-speech-recognition', model.repo, {
+            device,
+            dtype: fmt.dtype,
+            progress_callback,
+          })
+          loadedBackend = device
+          loadedFormat = fmt.id
+          return pipe
+        } catch (err) {
+          lastError = err
+          console.warn(`[quick-notes] ${device}/${fmt.id} failed, trying next`, err)
+          onProgress?.({
+            phase: 'falling-back',
+            from: `${device}/${fmt.id}`,
+            bytes: downloadedBytes,
+          })
+        }
       }
     }
     throw lastError || new Error('No backend could be started.')
@@ -193,6 +259,7 @@ export async function loadWhisper(modelId = 'tiny', { onProgress, backend = 'was
     pipelinePromise = null
     loadedModelId = null
     loadedBackend = null
+    loadedFormat = null
     throw err
   }
 }
@@ -208,6 +275,7 @@ export async function unloadWhisper() {
   loadedModelId = null
   loadedBackend = null
   loadedRequest = null
+  loadedFormat = null
   downloadedBytes = 0
   try {
     const pipe = await pending
@@ -254,9 +322,9 @@ async function decodeTo16k(blob) {
  */
 export async function transcribeWithWhisper(
   blob,
-  { modelId = 'tiny', backend = 'wasm', onProgress } = {}
+  { modelId = 'tiny', backend = 'wasm', format = 'balanced', onProgress } = {}
 ) {
-  const pipe = await loadWhisper(modelId, { onProgress, backend })
+  const pipe = await loadWhisper(modelId, { onProgress, backend, format })
   onProgress?.({ phase: 'decoding' })
   const { samples, seconds } = await decodeTo16k(blob)
 
@@ -289,6 +357,7 @@ export async function transcribeWithWhisper(
     // The number the go/no-go thresholds are written against.
     realtimeFactor: seconds > 0 ? tookMs / 1000 / seconds : null,
     backend: loadedBackend,
+    format: loadedFormat,
     modelId,
     bytes: downloadedBytes,
   }

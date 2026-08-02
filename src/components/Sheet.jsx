@@ -4,32 +4,51 @@
  * question and both answers are full-size buttons — never a tiny "cancel".
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import Icon from './Icon.jsx'
 import Button from './Button.jsx'
 
 export default function Sheet({ open, onClose, title, subtitle, children, full = false, footer }) {
+  /**
+   * Android's back button should close the sheet, not leave the screen.
+   *
+   * This effect MUST depend on `open` alone. Callers routinely pass an inline
+   * arrow as `onClose`, which is a new identity on every render — and the
+   * recording screen re-renders five times a second from its timer. With
+   * `onClose` in the deps, cleanup ran on every tick: history.back() fired
+   * popstate, popstate called onClose, and the sheet slammed shut a moment
+   * after opening. On the device that looked like "something pops up and
+   * instantly disappears"; in tests nothing re-rendered fast enough to show it.
+   *
+   * The ref keeps the newest callback without making the effect re-run.
+   */
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
   useEffect(() => {
-    if (!open) return
+    if (!open) return undefined
     const onKey = (e) => {
-      if (e.key === 'Escape') onClose?.()
+      if (e.key === 'Escape') closeRef.current?.()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
+  }, [open])
 
-  // Android's back button should close the sheet, not leave the screen.
   useEffect(() => {
-    if (!open) return
-    const state = { sheet: true }
-    window.history.pushState(state, '')
-    const onPop = () => onClose?.()
+    if (!open) return undefined
+    let closedByBack = false
+    window.history.pushState({ qnSheet: true }, '')
+    const onPop = () => {
+      closedByBack = true
+      closeRef.current?.()
+    }
     window.addEventListener('popstate', onPop)
     return () => {
       window.removeEventListener('popstate', onPop)
-      if (window.history.state?.sheet) window.history.back()
+      // Only unwind our own entry, and never when the back button already did.
+      if (!closedByBack && window.history.state?.qnSheet) window.history.back()
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

@@ -307,6 +307,7 @@ const whisper = {
     const result = await transcribeWithWhisper(blob, opts)
     return result.text
   },
+
   /** Same pass, but returns the timing numbers the spike is judged on. */
   async transcribeBlobDetailed(blob, opts = {}) {
     const { transcribeWithWhisper } = await import('./whisper.js')

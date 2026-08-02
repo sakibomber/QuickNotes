@@ -240,6 +240,23 @@ On the S23 the WebGPU backend loaded, reported itself active, picked notes off t
 
 **Pending decision:** if CPU completes reliably, the 26 MB WebGPU/JSEP binary comes out of the deploy (75 MB → ~13 MB once the unused variants go with it) and WebGPU-on-mobile gets logged as not worth the weight until proven on more than paper. Waiting on the CPU-path numbers before cutting, so the option is still there if CPU turns out unusable too.
 
+## 14. Third device round — quantization, sheet thrash, safe areas (2026-08-01)
+
+**1 · CPU session would not create — q4 reached the WASM provider.**
+`TransposeDQWeightsForMatMulNBits — missing required scale` on base.en/WASM. MatMulNBits is 4-bit, so a q4 tensor reached an execution provider that cannot handle it; q4 is effectively WebGPU-only. Passing `dtype: 'q8'` as a bare string did not prevent it, so the format is now **pinned per module** (`{ encoder_model, decoder_model_merged }`) and exposed as a **Format** choice — Balanced (8-bit, CPU-safe), Original (fp32, always works, much larger), Smallest (4-bit, WebGPU only). A session that will not create walks the ladder rather than dead-ending on ONNX internals. Same principle as the mic sweep: after being wrong repeatedly about ORT specifics, let the device decide and report.
+
+**2 · Cancel: the actual root cause, three rounds in.**
+`Sheet`'s back-button effect listed `onClose` in its dependencies. Callers pass inline arrows, and the recording screen re-renders **five times a second** from its timer. So cleanup ran on every tick — `history.back()` → `popstate` → `onClose()` → the sheet shut itself a moment after opening. That is exactly "something pops up and instantly disappears". Fixed by holding `onClose` in a ref so the effect depends on `open` alone.
+
+> Why two earlier attempts missed it: both previous fixes were to `Record.jsx` (phase handling), and the tests exercised sheets in screens that do not re-render on a timer. Nothing in the suite rendered fast enough to expose it.
+
+**Regression test, and a note on what makes one real.** The first version of the test passed against the deliberately re-broken code — it hardcoded `open`, so the sheet could never close. The second still passed, because jsdom's `history.back()`/`popstate` does not emulate a browser closely enough to reproduce the *symptom*. The test now asserts the **cause**: exactly one `pushState` across twelve forced re-renders. Verified both ways — passes with the fix, fails with the bug reintroduced. A regression test that has not been watched to fail is not evidence.
+
+**3 · Bottom nav behind the Android system buttons.**
+Both the viewport meta and the safe-area CSS were present and correct in the deployed build, so "did the fix ship" was the wrong question. The cause is `viewport-fit=cover` itself: it deliberately extends the viewport *under* the system bars and then relies on `env(safe-area-inset-bottom)` to compensate — which Chrome on Android reports as **0** with 3-button navigation. Edge-to-edge is not worth hiding the navigation, so `viewport-fit=cover` is removed. Safe-area padding stays as belt-and-braces; it is a no-op at 0.
+
+Added **Settings → Screen fit**: reports the measured insets, window vs visible height, and how much of the app falls below the visible area, with a copy button. It is wrapped so a diagnostic can never crash the screen it diagnoses.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

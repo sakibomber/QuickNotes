@@ -153,6 +153,12 @@ export const DEFAULT_SETTINGS = {
    * demotes it to 'wasm' permanently. See DECISIONS.md §13.
    */
   whisperBackend: 'wasm',
+  /**
+   * Weight format. 'balanced' (8-bit) is CPU-safe; 'smallest' (4-bit) needs
+   * the graphics chip and will not create a session on the CPU — that failure
+   * is what the S23 hit. See DECISIONS.md §14.
+   */
+  whisperFormat: 'balanced',
   /** Offer to split a dictated line into separate checklist items (spec §8). */
   splitOnFile: true,
   /** Keep the screen awake while recording so a screen-off doesn't cut capture. */

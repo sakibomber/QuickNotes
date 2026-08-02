@@ -11,7 +11,14 @@
  */
 
 import { useEffect, useState } from 'react'
-import { WHISPER_MODELS, hasWebGPU, loadWhisper, loadedModel, wasmSource } from '../lib/whisper.js'
+import {
+  FORMAT_LIST,
+  WHISPER_MODELS,
+  hasWebGPU,
+  loadWhisper,
+  loadedModel,
+  wasmSource,
+} from '../lib/whisper.js'
 import { TRANSCRIBERS } from '../lib/transcribe.js'
 import { bytes } from '../lib/format.js'
 import Icon from './Icon.jsx'
@@ -52,7 +59,11 @@ export default function WhisperPanel({ onToast }) {
     setErrorText(null)
     setProgress({ phase: 'starting' })
     try {
-      await loadWhisper(settings.whisperModel, { onProgress: setProgress })
+      await loadWhisper(settings.whisperModel, {
+        onProgress: setProgress,
+        backend: settings.whisperBackend,
+        format: settings.whisperFormat,
+      })
       // Clear it explicitly. The library does not reliably emit a final
       // "ready", so waiting for one left a full bar reading "Downloading…"
       // forever — which looks exactly like a hang.
@@ -89,6 +100,8 @@ export default function WhisperPanel({ onToast }) {
       if (!row?.blob) throw new Error('recording missing')
       const result = await TRANSCRIBERS.whisper.transcribeBlobDetailed(row.blob, {
         modelId: settings.whisperModel,
+        backend: settings.whisperBackend,
+        format: settings.whisperFormat,
         onProgress: setProgress,
       })
       setBench(result)
@@ -124,6 +137,18 @@ export default function WhisperPanel({ onToast }) {
           options={WHISPER_MODELS.map((m) => ({ value: m.id, label: `${m.label} · ${m.approxMB} MB` }))}
         />
         <p className="mt-2 px-1 text-[0.8rem] leading-snug text-muted">{model.blurb}</p>
+      </div>
+
+      <div>
+        <div className="mb-2 px-1 text-[0.85rem] text-muted">Format</div>
+        <Segmented
+          value={settings.whisperFormat}
+          onChange={(v) => setSetting('whisperFormat', v)}
+          options={FORMAT_LIST.map((f) => ({ value: f.id, label: f.label }))}
+        />
+        <p className="mt-2 px-1 text-[0.8rem] leading-snug text-muted">
+          {(FORMAT_LIST.find((f) => f.id === settings.whisperFormat) || FORMAT_LIST[0]).blurb}
+        </p>
       </div>
 
       {progress && (
@@ -238,6 +263,7 @@ export default function WhisperPanel({ onToast }) {
               {bench.realtimeFactor <= 2 ? ' — within target' : ' — over target'}
             </div>
             <div>backend: {bench.backend}</div>
+            <div>format: {bench.format}</div>
             <div>model: {bench.modelId}</div>
             {wasm && (
               <div className={wasm.local ? 'text-accent' : 'text-danger'}>

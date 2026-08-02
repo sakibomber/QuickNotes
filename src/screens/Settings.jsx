@@ -22,6 +22,7 @@ import { Screen, ScreenHeader, ScreenBody } from '../components/Screen.jsx'
 import Sheet, { ConfirmSheet } from '../components/Sheet.jsx'
 import { StampLabel } from '../components/Stamp.jsx'
 import MicPanel from '../components/MicPanel.jsx'
+import ScreenFitPanel from '../components/ScreenFitPanel.jsx'
 import WhisperPanel from '../components/WhisperPanel.jsx'
 import { APP_VERSION } from '../version.js'
 
@@ -355,6 +356,11 @@ export default function Settings() {
               aria-hidden="true"
               tabIndex={-1}
             />
+          </Section>
+
+          {/* ------------------------------------------------ screen fit */}
+          <Section title="Screen fit">
+            <ScreenFitPanel onToast={(msg, tone) => showToast(msg, { tone, ms: 2600 })} />
           </Section>
 
           {/* ---------------------------------------------------- about */}
