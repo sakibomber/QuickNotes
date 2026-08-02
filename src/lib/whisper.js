@@ -68,19 +68,27 @@ const MODELS = {
     id: 'tiny',
     repo: 'onnx-community/whisper-tiny.en',
     label: 'Small',
-    approxMB: 42,
+    // Download size depends on BOTH model and format. Quoting the model
+    // number alone is what made a 186 MB download sit under a "42 MB" button.
+    sizes: { balanced: 42, original: 155, smallest: 28 },
     blurb: 'Quickest. Good enough for most notes.',
   },
   base: {
     id: 'base',
     repo: 'onnx-community/whisper-base.en',
     label: 'Better',
-    approxMB: 78,
+    sizes: { balanced: 78, original: 290, smallest: 50 },
     blurb: 'Slower, more accurate. Try this if Small gets words wrong.',
   },
 }
 
 export const WHISPER_MODELS = Object.values(MODELS)
+
+/** Approximate download for a model+format pair, in MB. */
+export function approxDownloadMB(modelId, formatId) {
+  const m = MODELS[modelId] || MODELS.tiny
+  return m.sizes[formatId] ?? m.sizes.balanced
+}
 
 let pipelinePromise = null
 let loadedModelId = null
@@ -229,6 +237,7 @@ export async function loadWhisper(
     for (const device of devices) {
       for (const formatId of formatIds) {
         const fmt = FORMATS[formatId] || FORMATS.balanced
+        onProgress?.({ phase: 'trying', device, format: fmt.id, label: fmt.label })
         try {
           const pipe = await pipeline('automatic-speech-recognition', model.repo, {
             device,
@@ -244,6 +253,8 @@ export async function loadWhisper(
           onProgress?.({
             phase: 'falling-back',
             from: `${device}/${fmt.id}`,
+            fromLabel: fmt.label,
+            reason: String(err?.message || err).slice(0, 200),
             bytes: downloadedBytes,
           })
         }

@@ -155,6 +155,7 @@ export function StoreProvider({ children }) {
         setSettings(data.settings)
         setGrocery(data.grocery)
         applyTheme(data.settings.theme, data.settings.textScale)
+        applyGutter(data.settings.navGutter)
         setReady(true)
         db.requestPersistence()
         // Refs are populated on the next render; sweep just after.
@@ -206,6 +207,7 @@ export function StoreProvider({ children }) {
     settingsRef.current = next
     setSettings(next)
     if (key === 'theme' || key === 'textScale') applyTheme(next.theme, next.textScale)
+    if (key === 'navGutter') applyGutter(value)
     await db.put('settings', { key, value })
   }, [])
 
@@ -851,6 +853,17 @@ export function useStore() {
 /* ------------------------------------------------------------------ theme */
 
 const THEME_COLORS = { dark: '#14170F', sepia: '#E8DCC0' }
+
+/** Extra bottom clearance for phones whose system buttons overlay the app. */
+export function applyGutter(px) {
+  const value = Number.isFinite(Number(px)) ? Math.max(0, Number(px)) : 0
+  document.documentElement.style.setProperty('--nav-gutter', `${value}px`)
+  try {
+    localStorage.setItem('qn.navGutter', String(value))
+  } catch {
+    /* private mode */
+  }
+}
 
 export function applyTheme(theme, textScale) {
   const t = theme === 'sepia' ? 'sepia' : 'dark'

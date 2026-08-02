@@ -257,6 +257,40 @@ Both the viewport meta and the safe-area CSS were present and correct in the dep
 
 Added **Settings → Screen fit**: reports the measured insets, window vs visible height, and how much of the app falls below the visible area, with a copy button. It is wrapped so a diagnostic can never crash the screen it diagnoses.
 
+## 15. The nav bar: a gutter, not an inset (2026-08-01)
+
+The Screen fit readout settled it:
+
+```
+safe area bottom: 0px      window height: 742px
+viewport-fit cover: no     visible height: 742px      cut off below: 0px
+```
+
+The app is sized correctly and clips nothing. Android draws its buttons **on top of a valid viewport**, and reports no inset for it — a situation no amount of `env(safe-area-inset-*)` can express, because from CSS's point of view nothing is wrong. So inset-chasing stopped here.
+
+**A plain fixed gutter instead.** `--nav-gutter` (default **48 px**) is added to `.safe-b` alongside the safe-area inset, lifting the nav above where the system buttons draw.
+
+**It defaults ON, and that is the important call.** The failure modes are wildly asymmetric: with it off, the nav can be unreachable *and Settings is behind that same nav* — so the person who needs the fix cannot get to the control that provides it. With it on, you get a strip of empty space. Given the distribution audience cannot debug either way, default to reachable. It is applied pre-paint from `localStorage` alongside the theme, so the nav never renders under the buttons even for one frame.
+
+Adjustable in **Settings → Screen fit** (None / Some / More) with instructions written for someone looking at the problem, not reading a changelog.
+
+**Believed specific to 3-button navigation.** Gesture navigation reserves no persistent strip, so the gutter is likely unnecessary there — untested, and the reason the control exists rather than a hardcoded constant.
+
+## 16. Swipe dead zone over the note text (2026-08-01)
+
+`touch-action` applies to the element the touch **starts on**, not just an ancestor. `.swipe-surface` had `pan-y`, but the scrollable note text inside it did not — so a drag beginning over the words was claimed by the browser before any `pointermove` reached the handler. That is the dead zone. Fixed by applying `pan-y` to the surface's descendants as well; vertical scrolling stays native, horizontal stays ours. Editing is unaffected because the `.swipe-surface` class is removed while the textarea is open.
+
+## 17. The format ladder was working; the label was lying (2026-08-01)
+
+Reported as "the format switch is not taking effect — Balanced still pulling q4, *Downloading… 186 MB* under a button saying 42 MB".
+
+The switch was working. 42 MB (Balanced attempt) + ~155 MB (Original fallback) ≈ 186 MB: the ladder walked, and the byte counter accumulated across both attempts while the button quoted the **model** size with no regard for the **format**. Two real defects, neither of them the one reported:
+
+1. **Download size depends on both axes.** Sizes are now a model × format matrix, so the button quotes what will actually be fetched.
+2. **The fallback was invisible.** It now announces each attempt live ("Trying Balanced…", "Balanced did not work — trying the next one") and lists every format that refused, with the ONNX reason. A silent fallback reads as a broken setting.
+
+Still open: **why** Balanced (8-bit) will not create a session on this phone. It is now visible rather than inferred from a byte count, which is the prerequisite for fixing it.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

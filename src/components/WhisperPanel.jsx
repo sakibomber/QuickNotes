@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react'
 import {
   FORMAT_LIST,
   WHISPER_MODELS,
+  approxDownloadMB,
   hasWebGPU,
   loadWhisper,
   loadedModel,
@@ -44,6 +45,7 @@ export default function WhisperPanel({ onToast }) {
   const [benching, setBenching] = useState(false)
   const [wasm, setWasm] = useState(null)
   const [errorText, setErrorText] = useState(null)
+  const [attempts, setAttempts] = useState([])
 
   useEffect(() => {
     hasWebGPU().then(setGpu)
@@ -57,10 +59,16 @@ export default function WhisperPanel({ onToast }) {
   const download = async () => {
     setLoading(true)
     setErrorText(null)
+    setAttempts([])
     setProgress({ phase: 'starting' })
     try {
       await loadWhisper(settings.whisperModel, {
-        onProgress: setProgress,
+        onProgress: (p) => {
+          if (p.phase === 'falling-back') {
+            setAttempts((a) => [...a, { label: p.fromLabel, reason: p.reason }])
+          }
+          setProgress(p)
+        },
         backend: settings.whisperBackend,
         format: settings.whisperFormat,
       })
@@ -123,7 +131,10 @@ export default function WhisperPanel({ onToast }) {
             notes up afterwards — on the phone itself, with nothing sent anywhere.
           </p>
           <p className="mt-2 text-[0.82rem] leading-relaxed text-muted">
-            It needs a one-time download of about <strong className="text-ink">{model.approxMB} MB</strong>.
+            It needs a one-time download of about{' '}
+            <strong className="text-ink">
+              {approxDownloadMB(settings.whisperModel, settings.whisperFormat)} MB
+            </strong>.
             Best done on wi-fi. You can carry on using the app without it.
           </p>
         </div>
@@ -159,7 +170,11 @@ export default function WhisperPanel({ onToast }) {
                 ? 'Downloading…'
                 : progress.phase === 'decoding'
                   ? 'Reading the recording…'
-                  : progress.phase === 'transcribing'
+                  : progress.phase === 'trying'
+                  ? `Trying ${progress.label}…`
+                  : progress.phase === 'falling-back'
+                    ? `${progress.fromLabel} did not work — trying the next one`
+                    : progress.phase === 'transcribing'
                     ? 'Writing it up…'
                     : progress.phase === 'ready'
                       ? 'Ready'
@@ -177,6 +192,21 @@ export default function WhisperPanel({ onToast }) {
         </div>
       )}
 
+      {attempts.length > 0 && (
+        <div className="rounded-xl border border-line bg-surface2 px-3 py-2.5">
+          <p className="text-[0.82rem] leading-snug text-ink">
+            Some formats would not run on this phone:
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {attempts.map((a, i) => (
+              <li key={i} className="font-mono text-[0.7rem] leading-snug break-words text-muted">
+                {a.label}: {a.reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {errorText && (
         <div className="rounded-xl border border-danger px-3 py-2.5">
           <p className="text-[0.85rem] leading-snug text-danger">It could not start.</p>
@@ -188,7 +218,9 @@ export default function WhisperPanel({ onToast }) {
 
       {!settings.whisperEnabled ? (
         <Button variant="primary" full icon="download" onClick={download} disabled={loading}>
-          {loading ? 'Downloading…' : `Download and turn on (${model.approxMB} MB)`}
+          {loading
+            ? 'Downloading…'
+            : `Download and turn on (about ${approxDownloadMB(settings.whisperModel, settings.whisperFormat)} MB)`}
         </Button>
       ) : (
         <>

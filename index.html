@@ -36,6 +36,8 @@
         if (t === 'sepia' || t === 'dark') document.documentElement.dataset.theme = t;
         var s = localStorage.getItem('qn.textScale');
         if (s) document.documentElement.style.setProperty('--ui-scale', s);
+        var g = localStorage.getItem('qn.navGutter');
+        document.documentElement.style.setProperty('--nav-gutter', (g === null ? 48 : g) + 'px');
       } catch (e) {}
     </script>
   </head>

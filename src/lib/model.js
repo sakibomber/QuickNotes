@@ -159,6 +159,18 @@ export const DEFAULT_SETTINGS = {
    * is what the S23 hit. See DECISIONS.md §14.
    */
   whisperFormat: 'balanced',
+
+  /**
+   * Extra space under the bottom nav, in px.
+   *
+   * Defaults ON. On an S23 with 3-button navigation Android draws its buttons
+   * over a correctly-sized viewport and reports no safe-area inset, so the nav
+   * is unreachable. The failure modes are asymmetric: with the gutter off the
+   * app can be unusable AND Settings unreachable, so you cannot even turn it
+   * on; with it on you get a strip of empty space. Default to reachable.
+   * Likely specific to 3-button nav — gesture navigation may not need it.
+   */
+  navGutter: 48,
   /** Offer to split a dictated line into separate checklist items (spec §8). */
   splitOnFile: true,
   /** Keep the screen awake while recording so a screen-off doesn't cut capture. */
