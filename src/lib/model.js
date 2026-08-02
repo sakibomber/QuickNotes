@@ -145,6 +145,14 @@ export const DEFAULT_SETTINGS = {
    */
   whisperEnabled: false,
   whisperModel: 'tiny',
+  /**
+   * 'wasm' (CPU only) or 'auto' (try WebGPU first).
+   *
+   * Defaults to CPU. On the S23 WebGPU loaded, reported itself active, then
+   * hung mid-inference with no result and no error. A watchdog trip on WebGPU
+   * demotes it to 'wasm' permanently. See DECISIONS.md §13.
+   */
+  whisperBackend: 'wasm',
   /** Offer to split a dictated line into separate checklist items (spec §8). */
   splitOnFile: true,
   /** Keep the screen awake while recording so a screen-off doesn't cut capture. */
@@ -196,6 +204,7 @@ export function newNote(fields = {}) {
      */
     transcribeState: null,
     transcribeMs: 0,
+    transcribeError: null,
     ...fields,
   }
 }

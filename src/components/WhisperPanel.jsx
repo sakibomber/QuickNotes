@@ -19,7 +19,16 @@ import Button, { Segmented } from './Button.jsx'
 import { useStore } from '../lib/store.jsx'
 
 export default function WhisperPanel({ onToast }) {
-  const { settings, setSetting, notes, transcribing, getAudio, runTranscriptionQueue } = useStore()
+  const {
+    settings,
+    setSetting,
+    notes,
+    transcribing,
+    getAudio,
+    runTranscriptionQueue,
+    retryAllTranscription,
+    transcribeCounts,
+  } = useStore()
   const [progress, setProgress] = useState(null)
   const [loading, setLoading] = useState(false)
   const [ready, setReady] = useState(!!loadedModel())
@@ -165,10 +174,44 @@ export default function WhisperPanel({ onToast }) {
                 {transcribing ? 'Writing up a note now…' : 'On — notes are written up in the background'}
               </span>
               <span className="block text-[0.8rem] leading-snug text-muted">
-                {waiting > 0 ? `${waiting} waiting` : 'Nothing waiting'}
-                {loadedModel()?.backend ? ` · running on ${loadedModel().backend.toUpperCase()}` : ''}
+                {transcribeCounts.pending > 0
+                  ? `${transcribeCounts.pending} waiting`
+                  : 'Nothing waiting'}
+                {transcribeCounts.failed > 0 ? ` · ${transcribeCounts.failed} could not be done` : ''}
+                {loadedModel()?.backend ? ` · on ${loadedModel().backend.toUpperCase()}` : ''}
               </span>
             </span>
+          </div>
+
+          {transcribeCounts.failed > 0 && (
+            <Button
+              variant="solid"
+              full
+              icon="restart"
+              onClick={async () => {
+                const n = await retryAllTranscription()
+                onToast?.(`Trying ${n} again`)
+              }}
+            >
+              Try the {transcribeCounts.failed} that failed again
+            </Button>
+          )}
+
+          <div>
+            <div className="mb-2 px-1 text-[0.85rem] text-muted">How it runs</div>
+            <Segmented
+              value={settings.whisperBackend}
+              onChange={(v) => setSetting('whisperBackend', v)}
+              options={[
+                { value: 'wasm', label: 'Reliable (CPU)' },
+                { value: 'auto', label: 'Fast (graphics)' },
+              ]}
+            />
+            <p className="mt-2 px-1 text-[0.8rem] leading-snug text-muted">
+              {settings.whisperBackend === 'wasm'
+                ? 'Slower, but it finishes. This is the default because the graphics route hung on this phone.'
+                : 'Tries the graphics chip first. If a note takes too long it switches back to CPU on its own.'}
+            </p>
           </div>
           <Button variant="quiet" full icon="close" onClick={() => setSetting('whisperEnabled', false)}>
             Turn it off

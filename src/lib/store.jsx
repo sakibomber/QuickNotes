@@ -652,6 +652,7 @@ export function StoreProvider({ children }) {
           const { transcribeBlobDetailed } = TRANSCRIBERS.whisper
           const result = await transcribeBlobDetailed(row.blob, {
             modelId: settingsRef.current.whisperModel,
+            backend: settingsRef.current.whisperBackend,
           })
 
           // Never overwrite words the user typed while this was running.
@@ -670,23 +671,69 @@ export function StoreProvider({ children }) {
           }
         } catch (err) {
           console.warn('[quick-notes] transcription failed', err)
-          await patchNote(next.id, { transcribeState: 'failed' })
+
+          /**
+           * A watchdog trip on WebGPU demotes it permanently and retries the
+           * same note on CPU. WebGPU reported itself active on the S23 and
+           * then hung forever; slow but finishing beats fast but hung, and the
+           * user should not have to know any of that happened.
+           */
+          const timedOut = err?.name === 'TranscribeTimeout'
+          const wasWebGPU = err?.backend === 'webgpu'
+          const { unloadWhisper } = await import('./whisper.js')
+          await unloadWhisper()
+
+          if (timedOut && wasWebGPU && settingsRef.current.whisperBackend !== 'wasm') {
+            await setSetting('whisperBackend', 'wasm')
+            await patchNote(next.id, { transcribeState: 'pending' })
+            showToast('Switched to the slower, reliable method', { ms: 3000 })
+            continue
+          }
+
+          await patchNote(next.id, {
+            transcribeState: 'failed',
+            transcribeError: timedOut ? 'took too long' : String(err?.message || err).slice(0, 140),
+          })
+          // Stop the run rather than grinding the same fault through every
+          // queued note. They stay 'pending'-able via Retry.
+          if (timedOut) break
         }
       }
     } finally {
       queueRunning.current = false
       setTranscribing(null)
     }
-  }, [patchNote])
+  }, [patchNote, setSetting, showToast])
 
   /** Puts a note (back) in the queue. Used on capture and on manual retry. */
   const enqueueTranscription = useCallback(
     async (noteId) => {
-      await patchNote(noteId, { transcribeState: 'pending' })
+      await patchNote(noteId, { transcribeState: 'pending', transcribeError: null })
       runTranscriptionQueue()
     },
     [patchNote, runTranscriptionQueue]
   )
+
+  /** Puts every failed note back in the queue. */
+  const retryAllTranscription = useCallback(async () => {
+    const failed = notesRef.current.filter((n) => n.transcribeState === 'failed')
+    await Promise.all(
+      failed.map((n) => patchNote(n.id, { transcribeState: 'pending', transcribeError: null }))
+    )
+    runTranscriptionQueue()
+    return failed.length
+  }, [patchNote, runTranscriptionQueue])
+
+  /** Counts for the UI, so a stalled queue is visible rather than inferred. */
+  const transcribeCounts = useMemo(() => {
+    let pending = 0
+    let failed = 0
+    for (const n of notes) {
+      if (n.transcribeState === 'pending' || n.transcribeState === 'running') pending++
+      else if (n.transcribeState === 'failed') failed++
+    }
+    return { pending, failed }
+  }, [notes])
 
   // Resume on launch: anything left 'running' when the app died goes back to
   // 'pending' and the queue picks it up.
@@ -787,6 +834,8 @@ export function StoreProvider({ children }) {
     getBucket,
     transcribing,
     enqueueTranscription,
+    retryAllTranscription,
+    transcribeCounts,
     runTranscriptionQueue,
   }
 

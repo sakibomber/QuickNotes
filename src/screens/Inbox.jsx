@@ -52,6 +52,7 @@ export default function Inbox() {
     splitNoteInto,
     getBucket,
     haptic,
+    enqueueTranscription,
   } = useStore()
   const { navigate } = useRouter()
 
@@ -440,6 +441,7 @@ export default function Inbox() {
               }
             }}
             onToggleKeepAudio={() => patchNote(note.id, { audioKept: !note.audioKept })}
+            onRetryTranscribe={() => enqueueTranscription(note.id)}
             retention={settings.audioRetention}
             remaining={inboxNotes.length}
           />
@@ -581,6 +583,7 @@ function TriageCard({
   setDraft,
   onToggleEdit,
   onToggleKeepAudio,
+  onRetryTranscribe,
   retention,
   remaining,
 }) {
@@ -638,6 +641,39 @@ function TriageCard({
 
         {/* card foot: audit tools */}
         <div className="shrink-0 space-y-2 border-t border-linesoft px-3 py-2.5">
+          {/* Written-up-from-voice state. A queue that stalls silently is
+              indistinguishable from one that is working, and nobody should
+              have to watch a counter to find that out. */}
+          {note.transcribeState === 'pending' && (
+            <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface2 px-3 py-2">
+              <Icon name="clock" size={18} className="shrink-0 text-muted" />
+              <span className="text-[0.8rem] leading-snug text-muted">
+                Waiting to be written up from your voice.
+              </span>
+            </div>
+          )}
+          {note.transcribeState === 'running' && (
+            <div className="flex items-center gap-2.5 rounded-xl border border-accent px-3 py-2">
+              <Icon name="text" size={18} className="shrink-0 animate-rec text-accent" />
+              <span className="text-[0.8rem] leading-snug text-ink">Writing this one up now…</span>
+            </div>
+          )}
+          {note.transcribeState === 'failed' && (
+            <button
+              type="button"
+              onClick={onRetryTranscribe}
+              className="press focus-ring flex w-full items-center gap-2.5 rounded-xl border border-danger px-3 py-2 text-left"
+            >
+              <Icon name="warning" size={18} className="shrink-0 text-danger" />
+              <span className="min-w-0 flex-1 text-[0.8rem] leading-snug text-muted">
+                Could not write this one up
+                {note.transcribeError ? ` — ${note.transcribeError}` : ''}. Play it and type it in,
+                or tap to try again.
+              </span>
+              <span className="stamp-label shrink-0 text-[0.62rem] text-accent">Retry</span>
+            </button>
+          )}
+
           {note.audioBlobId ? (
             <AudioPlayer note={note} compact />
           ) : (

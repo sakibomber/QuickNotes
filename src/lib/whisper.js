@@ -39,7 +39,31 @@ export const WHISPER_MODELS = Object.values(MODELS)
 let pipelinePromise = null
 let loadedModelId = null
 let loadedBackend = null
+let loadedRequest = null
 let downloadedBytes = 0
+
+/**
+ * Hard ceiling on one transcription, as a multiple of the audio length.
+ *
+ * The ship/no-ship threshold is ~2× realtime and the stop threshold is ~3–4×,
+ * so anything past 6× is already a failure even if it eventually returns.
+ * Bounding it turns an indefinite hang into a reportable error, which is the
+ * whole point — a silent hang must never be a terminal state.
+ */
+const WATCHDOG_FACTOR = 6
+const WATCHDOG_FLOOR_MS = 45_000
+
+export function watchdogMs(audioSeconds) {
+  return Math.max(WATCHDOG_FLOOR_MS, Math.round((audioSeconds || 0) * 1000 * WATCHDOG_FACTOR))
+}
+
+export class TranscribeTimeout extends Error {
+  constructor(ms, backend) {
+    super(`Gave up after ${Math.round(ms / 1000)}s on ${backend || 'unknown'}`)
+    this.name = 'TranscribeTimeout'
+    this.backend = backend
+  }
+}
 
 export function whisperSupported() {
   // WASM is the floor; WebGPU is a bonus we detect at load time.
@@ -81,11 +105,14 @@ export async function wasmSource() {
  * Loads the model, reporting progress so the download never looks like a hang.
  * Resolves to a transcription pipeline. Safe to call repeatedly.
  */
-export async function loadWhisper(modelId = 'tiny', { onProgress } = {}) {
-  if (pipelinePromise && loadedModelId === modelId) return pipelinePromise
+export async function loadWhisper(modelId = 'tiny', { onProgress, backend = 'wasm' } = {}) {
+  if (pipelinePromise && loadedModelId === modelId && loadedRequest === backend) {
+    return pipelinePromise
+  }
 
   const model = MODELS[modelId] || MODELS.tiny
   loadedModelId = modelId
+  loadedRequest = backend
   downloadedBytes = 0
 
   pipelinePromise = (async () => {
@@ -129,7 +156,16 @@ export async function loadWhisper(modelId = 'tiny', { onProgress } = {}) {
      * S23: one missing WebGPU asset killed transcription outright instead of
      * quietly running slower.
      */
-    const devices = (await hasWebGPU()) ? ['webgpu', 'wasm'] : ['wasm']
+    /**
+     * Backend order.
+     *
+     * Default is CPU-only. WebGPU loaded and reported itself active on the
+     * S23, then hung indefinitely mid-inference — no result, no error, no way
+     * out. Slow but finishing beats fast but hung, so WebGPU is now opt-in
+     * ('auto') rather than preferred, and a hang demotes it permanently.
+     */
+    const devices =
+      backend === 'auto' && (await hasWebGPU()) ? ['webgpu', 'wasm'] : ['wasm']
     let lastError = null
 
     for (const device of devices) {
@@ -161,11 +197,24 @@ export async function loadWhisper(modelId = 'tiny', { onProgress } = {}) {
   }
 }
 
-export function unloadWhisper() {
+/**
+ * Throws the pipeline away. Called after a watchdog trip: a hung inference
+ * cannot be cancelled from here, so the session is disposed and the next
+ * attempt starts from a clean one rather than queueing behind a dead job.
+ */
+export async function unloadWhisper() {
+  const pending = pipelinePromise
   pipelinePromise = null
   loadedModelId = null
   loadedBackend = null
+  loadedRequest = null
   downloadedBytes = 0
+  try {
+    const pipe = await pending
+    await pipe?.dispose?.()
+  } catch {
+    /* it was already broken; that is why we are here */
+  }
 }
 
 /**
@@ -203,18 +252,33 @@ async function decodeTo16k(blob) {
  * being judged on: how long the audio was, how long the pass took, and the
  * ratio between them.
  */
-export async function transcribeWithWhisper(blob, { modelId = 'tiny', onProgress } = {}) {
-  const pipe = await loadWhisper(modelId, { onProgress })
+export async function transcribeWithWhisper(
+  blob,
+  { modelId = 'tiny', backend = 'wasm', onProgress } = {}
+) {
+  const pipe = await loadWhisper(modelId, { onProgress, backend })
   onProgress?.({ phase: 'decoding' })
   const { samples, seconds } = await decodeTo16k(blob)
 
   onProgress?.({ phase: 'transcribing', seconds })
   const startedAt = performance.now()
-  const output = await pipe(samples, {
-    chunk_length_s: 30,
-    stride_length_s: 5,
-    return_timestamps: false,
-  })
+
+  // Watchdog. A hung inference cannot be cancelled, so it is raced against a
+  // timer and abandoned — the session is then disposed so the next attempt is
+  // not queued behind a dead job.
+  const limit = watchdogMs(seconds)
+  let timer
+  const output = await Promise.race([
+    pipe(samples, {
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      return_timestamps: false,
+    }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new TranscribeTimeout(limit, loadedBackend)), limit)
+    }),
+  ]).finally(() => clearTimeout(timer))
+
   const tookMs = Math.round(performance.now() - startedAt)
 
   const text = (Array.isArray(output) ? output[0]?.text : output?.text) || ''

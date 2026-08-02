@@ -226,6 +226,20 @@ Because asserting that is worth less than being able to check it, the Whisper pa
 
 **Go/no-go thresholds (set before measuring):** under ~2× realtime with readable accuracy → ship. Worse than ~3–4× realtime, or garbage accuracy → stop and report; hosted-with-proxy is only discussed after these numbers exist.
 
+## 13. WebGPU hung; CPU is the default, and a hang is now recoverable (2026-08-01)
+
+On the S23 the WebGPU backend loaded, reported itself active, picked notes off the queue (1 → 3) — and then hung. Five minutes, no completion, no timing block, no error. That is the worst failure mode this app can have: it looks like progress.
+
+**Three changes.**
+
+**1 · CPU is the default.** `whisperBackend` defaults to `'wasm'`. Slow but finishing beats fast but hung. WebGPU is available as "Fast (graphics)" for anyone whose device handles it, but it is no longer the automatic choice.
+
+**2 · A watchdog, because a silent hang must never be terminal.** One transcription is bounded at **6× the audio length** (45 s floor). That number is not arbitrary: the ship threshold is ~2× realtime and the stop threshold is ~3–4×, so anything past 6× is already a failure even if it eventually returns. A hung inference cannot be cancelled, so it is raced against a timer, abandoned, and the pipeline **disposed** so the next attempt does not queue behind a dead job. If the trip happened on WebGPU, the backend is demoted to CPU **permanently** and the same note is retried automatically — the user sees "Switched to the slower, reliable method" and nothing else. Otherwise the note is marked `failed` with the reason, and the run stops rather than grinding the same fault through every queued note.
+
+**3 · The queue state is visible.** `transcribeState` now shows on the triage card — "Waiting to be written up", "Writing this one up now…", or "Could not write this one up — *reason*" with a Retry that re-queues it. Settings shows pending and failed counts and a "Try the N that failed again" button. Kyle diagnosed the hang by watching a counter go 1 → 3 and stop; nobody else would have. A queue that stalls silently is indistinguishable from one that is working.
+
+**Pending decision:** if CPU completes reliably, the 26 MB WebGPU/JSEP binary comes out of the deploy (75 MB → ~13 MB once the unused variants go with it) and WebGPU-on-mobile gets logged as not worth the weight until proven on more than paper. Waiting on the CPU-path numbers before cutting, so the option is still there if CPU turns out unusable too.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype
