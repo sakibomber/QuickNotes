@@ -47,6 +47,53 @@ win.URL.revokeObjectURL = () => {}
 win.HTMLMediaElement.prototype.play = () => Promise.resolve()
 win.HTMLMediaElement.prototype.pause = () => {}
 
+/**
+ * A stub speech recogniser, installed HERE and not inside a test, because
+ * transcribe.js binds `window.SpeechRecognition` once at module load and the
+ * app is imported a few lines below.
+ *
+ * `autoEndMs` is the knob the sweep test needs: a recogniser that tidies itself
+ * up after a few milliseconds would hide a leaked one, so that test turns the
+ * auto-end off and then asks how many are still running.
+ */
+class FakeSpeechRecognition {
+  static live = 0
+  static autoEndMs = 10
+  static reset(autoEndMs = 10) {
+    FakeSpeechRecognition.live = 0
+    FakeSpeechRecognition.autoEndMs = autoEndMs
+  }
+  start() {
+    if (this._started) throw new Error('already started')
+    this._started = true
+    FakeSpeechRecognition.live++
+    setTimeout(() => {
+      this.onstart?.()
+      this.onaudiostart?.()
+    }, 0)
+    if (FakeSpeechRecognition.autoEndMs) {
+      // Android's "handed a silent stream" shape: audio starts, no sound, end.
+      this._timer = setTimeout(() => {
+        this._release()
+        this.onend?.()
+      }, FakeSpeechRecognition.autoEndMs)
+    }
+  }
+  stop() {
+    this._release()
+    this.onend?.()
+  }
+  _release() {
+    clearTimeout(this._timer)
+    if (this._started && !this._done) {
+      this._done = true
+      FakeSpeechRecognition.live--
+    }
+  }
+}
+define('SpeechRecognition', FakeSpeechRecognition)
+win.SpeechRecognition = FakeSpeechRecognition
+
 // Surface any console error as a test failure — silent breakage is the enemy.
 const consoleErrors = []
 const realError = console.error
@@ -507,6 +554,125 @@ test('a backup exports readable JSON and imports back', async () => {
   assert.match(json, /"text": "Milk"/)
   const back = parseBackup(json)
   assert.ok(back.notes.some((n) => n.transcript === 'Milk'))
+})
+
+/* ------------------------------------------- the microphone instrument */
+
+/**
+ * Fake media stack. Returns the constraint objects getUserMedia was actually
+ * asked for, which is the only thing these two tests care about.
+ */
+function installFakeMedia({ failGetUserMedia = false } = {}) {
+  const asked = []
+  const stream = { getTracks: () => [{ stop() {} }] }
+  Object.defineProperty(win.navigator, 'mediaDevices', {
+    value: {
+      getUserMedia: async (constraints) => {
+        asked.push(constraints.audio)
+        if (failGetUserMedia) {
+          const err = new Error('busy')
+          err.name = 'NotReadableError'
+          throw err
+        }
+        return stream
+      },
+    },
+    configurable: true,
+  })
+  class FakeMediaRecorder {
+    static isTypeSupported() {
+      return true
+    }
+    constructor() {
+      this.state = 'inactive'
+    }
+    start() {
+      this.state = 'recording'
+      setTimeout(() => this.ondataavailable?.({ data: new Blob(['x'.repeat(64)]) }), 0)
+    }
+    requestData() {}
+    stop() {
+      this.state = 'inactive'
+      setTimeout(() => this.onstop?.(), 0)
+    }
+  }
+  define('MediaRecorder', FakeMediaRecorder)
+  win.MediaRecorder = FakeMediaRecorder
+  return asked
+}
+
+function uninstallFakeMedia() {
+  Object.defineProperty(win.navigator, 'mediaDevices', { value: undefined, configurable: true })
+  define('MediaRecorder', undefined)
+  win.MediaRecorder = undefined
+}
+
+test('the microphone check opens the mic the way the app actually does', async () => {
+  /**
+   * The instrument bug: steps 5 and 7 built a Recorder with no audioProfile, so
+   * they always tested `processed`. Once the sweep has applied `raw`, the check
+   * a user runs — and copies to us — is measuring a configuration the app is
+   * not using. On one handset that is a nuisance; as the self-correcting
+   * hardware check for everyone else who installs this, it is a wrong answer
+   * delivered with confidence.
+   */
+  FakeSpeechRecognition.reset(10)
+  const asked = installFakeMedia()
+  try {
+    const { runDiagnostics } = await import('../src/lib/diagnostics.js')
+    const rows = await runDiagnostics({ audioProfile: 'raw' })
+
+    assert.ok(asked.length >= 2, `expected the mic to be opened at least twice, got ${asked.length}`)
+    for (const constraints of asked) {
+      assert.equal(
+        constraints.echoCancellation,
+        false,
+        `the check opened the mic with echoCancellation=${constraints.echoCancellation} while the ` +
+          'app is set to raw — it is testing a configuration the app does not use'
+      )
+    }
+    assert.ok(
+      rows.some((r) => r.id === 'speech-with-recorder'),
+      'the decisive step still runs'
+    )
+  } finally {
+    uninstallFakeMedia()
+  }
+})
+
+test('a sweep combination that cannot open the recorder leaves no recogniser running', async () => {
+  /**
+   * Speech-first combinations hand the microphone to the speech service first.
+   * If the recorder then fails to open, the probe was abandoned un-stopped: a
+   * live recogniser carried into the next combination, which would report that
+   * contamination as its own result. The 700 ms settle between combinations
+   * does not cover it — nothing was ever told to stop.
+   *
+   * Auto-end is off here on purpose. A recogniser that cleans itself up after
+   * 10 ms would make a leaked one invisible, and this test would pass against
+   * the bug.
+   */
+  FakeSpeechRecognition.reset(0)
+  installFakeMedia({ failGetUserMedia: true })
+  try {
+    const { findMicCombination } = await import('../src/lib/diagnostics.js')
+    const results = await findMicCombination()
+
+    assert.equal(results.length, 4, 'every combination was attempted')
+    assert.ok(
+      results.every((r) => !r.ok),
+      'nothing can pass when the recorder will not open'
+    )
+    assert.equal(
+      FakeSpeechRecognition.live,
+      0,
+      `${FakeSpeechRecognition.live} recogniser(s) still running after the sweep — each one is ` +
+        'holding the microphone through the combinations that follow it'
+    )
+  } finally {
+    uninstallFakeMedia()
+    FakeSpeechRecognition.reset(10)
+  }
 })
 
 test('nothing logged a console error the whole way through', () => {

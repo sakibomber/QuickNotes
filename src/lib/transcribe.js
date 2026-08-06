@@ -192,8 +192,13 @@ const webSpeech = {
    * anywhere near the microphone. This is the test that separates "the speech
    * service is unavailable on this device" from "it cannot share the mic with
    * the recorder" — the open question after the S23 test.
+   *
+   * `signal` lets a caller abandon a probe it can no longer use. The sweep
+   * needs this: if the recorder fails to open after the speech service already
+   * has the microphone, a live recogniser would otherwise run on into the next
+   * combination and poison its result.
    */
-  probe({ ms = 6000 } = {}) {
+  probe({ ms = 6000, signal } = {}) {
     return new Promise((resolve) => {
       if (!SR) {
         resolve({ ok: false, reason: 'unsupported', detail: 'No SpeechRecognition in this browser.' })
@@ -248,6 +253,15 @@ const webSpeech = {
         () => finish(!!heard, heard ? 'heard' : 'timeout', heard ? '' : 'No words in the time allowed.'),
         ms
       )
+      // Wired after `timer` exists, because finish() clears it.
+      const giveUp = () =>
+        finish(false, 'aborted-by-caller', 'The probe was stopped before it could finish.')
+      if (signal) {
+        if (signal.aborted) giveUp()
+        else signal.addEventListener('abort', giveUp, { once: true })
+      }
+      // An already-aborted probe must not open the microphone at all.
+      if (done) return
       try {
         r.start()
       } catch (e) {

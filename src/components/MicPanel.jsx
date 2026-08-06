@@ -80,7 +80,11 @@ export default function MicPanel({ onToast, onApplyCombination, settings }) {
     setRunning(true)
     setRows([])
     try {
-      await runDiagnostics({ onStep: (_row, all) => setRows(all) })
+      await runDiagnostics({
+        onStep: (_row, all) => setRows(all),
+        // Check the app as configured, not as shipped.
+        audioProfile: settings?.audioProfile,
+      })
     } finally {
       setRunning(false)
     }

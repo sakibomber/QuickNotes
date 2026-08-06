@@ -25,8 +25,8 @@ import { TRANSCRIBERS, describeSpeechError, speechSupported } from './transcribe
 const webSpeech = TRANSCRIBERS.webspeech
 
 /** Opens the mic briefly and reports the peak input level seen. */
-async function measureInput(ms = 2500) {
-  const recorder = new Recorder({ onLevel: (v) => { peak = Math.max(peak, v) } })
+async function measureInput(ms = 2500, audioProfile) {
+  const recorder = new Recorder({ audioProfile, onLevel: (v) => { peak = Math.max(peak, v) } })
   let peak = 0
   try {
     await recorder.start()
@@ -59,8 +59,13 @@ export function isStandalone() {
 /**
  * Runs the whole sequence, reporting each step as it completes so the screen
  * can fill in live rather than sitting blank for fifteen seconds.
+ *
+ * `audioProfile` is the user's saved setting, and it must be threaded through.
+ * A check that opens the microphone the default way while the app opens it a
+ * different way is not checking the app — and once the sweep has applied a
+ * combination, the default is exactly what the app is NOT doing.
  */
-export async function runDiagnostics({ onStep } = {}) {
+export async function runDiagnostics({ onStep, audioProfile } = {}) {
   const results = []
   const step = (row) => {
     results.push(row)
@@ -121,7 +126,7 @@ export async function runDiagnostics({ onStep } = {}) {
   if (!supported) return results
 
   /* 5 — microphone alone --------------------------------------------------- */
-  const mic = await measureInput()
+  const mic = await measureInput(2500, audioProfile)
   step({
     id: 'mic',
     label: 'Microphone alone',
@@ -162,7 +167,9 @@ export async function runDiagnostics({ onStep } = {}) {
   })
 
   /* 7 — speech WHILE recording --------------------------------------------- */
-  const recorder = new Recorder()
+  // Opened with the SAME profile the app records with, or this step answers a
+  // question nobody asked.
+  const recorder = new Recorder({ audioProfile })
   let together
   try {
     await recorder.start()
@@ -241,10 +248,21 @@ async function tryCombination({ profile, speechFirst }, ms = 6000) {
   let speech
   try {
     if (speechFirst) {
-      const probe = webSpeech.probe({ ms })
+      // The speech service is already holding the microphone by the time the
+      // recorder asks, so a recorder failure must not leave it running: the
+      // next combination would start with a live recogniser it did not create
+      // and cannot see, and would report that contamination as its result.
+      const stopProbe = new AbortController()
+      const probe = webSpeech.probe({ ms, signal: stopProbe.signal })
       // Let the speech service take the microphone before the recorder asks.
       await new Promise((r) => setTimeout(r, 400))
-      await recorder.start()
+      try {
+        await recorder.start()
+      } catch (err) {
+        stopProbe.abort()
+        await probe // wait for the recogniser to actually stop, not just be told to
+        throw err
+      }
       speech = await probe
     } else {
       await recorder.start()
