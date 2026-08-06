@@ -334,6 +334,54 @@ test('the sweep covers both variables, both ways', () => {
   assert.equal(COMBINATIONS[0].speechFirst, false, 'the shipped default is tried first')
 })
 
+/* ------------------------------------------------- model download sizes */
+
+test('every model quotes a real download size for every format', async () => {
+  // The button must say what gets fetched. The previous table claimed 28 MB for
+  // tiny/q4 and 50 MB for base/q4 against real sizes of 96 MB and 142 MB — the
+  // same "number under a button is a lie" defect §17 was meant to have closed.
+  const { WHISPER_MODELS, FORMAT_LIST, approxDownloadMB } = await import('../src/lib/whisper.js')
+  for (const model of WHISPER_MODELS) {
+    for (const format of FORMAT_LIST) {
+      const mb = model.sizes[format.id]
+      assert.equal(
+        typeof mb,
+        'number',
+        `${model.id} has no measured size for ${format.id} — it would render "undefined MB"`
+      )
+      assert.ok(mb > 0, `${model.id}/${format.id} must be a real number`)
+      assert.equal(approxDownloadMB(model.id, format.id), mb)
+    }
+  }
+})
+
+test('nothing claims 4-bit is the smallest download', async () => {
+  // q4 quantizes the matmul weights and leaves the embedding table at full
+  // precision, so it is LARGER than q8 at every model size. Any table that says
+  // otherwise has been guessed rather than measured.
+  const { WHISPER_MODELS } = await import('../src/lib/whisper.js')
+  for (const model of WHISPER_MODELS) {
+    assert.ok(
+      model.sizes.smallest > model.sizes.balanced,
+      `${model.id}: q4 is quoted at ${model.sizes.smallest} MB and q8 at ${model.sizes.balanced} MB. ` +
+        'q4 is never smaller in reality, so this number was not measured.'
+    )
+  }
+})
+
+test('model labels name the model they actually load', async () => {
+  // tiny.en shipped under a button reading "Small" for four device rounds.
+  const { WHISPER_MODELS } = await import('../src/lib/whisper.js')
+  for (const model of WHISPER_MODELS) {
+    const family = model.repo.split('/')[1].replace(/\.en$/, '').replace(/^whisper-/, '')
+    assert.match(
+      model.label.toLowerCase(),
+      new RegExp(family.toLowerCase()),
+      `"${model.label}" does not name ${model.repo} — the button has to say what it fetches`
+    )
+  }
+})
+
 /* -------------------------------------------------------------- format */
 
 test('formatting helpers', () => {

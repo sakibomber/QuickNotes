@@ -148,7 +148,12 @@ export default function WhisperPanel({ onToast }) {
         <Segmented
           value={settings.whisperModel}
           onChange={(v) => setSetting('whisperModel', v)}
-          options={WHISPER_MODELS.map((m) => ({ value: m.id, label: `${m.label} · ${m.approxMB} MB` }))}
+          // `m.approxMB` does not exist — this rendered "· undefined MB". The size
+          // depends on model AND format, which is the whole point of the matrix.
+          options={WHISPER_MODELS.map((m) => ({
+            value: m.id,
+            label: `${m.label} · ${approxDownloadMB(m.id, settings.whisperFormat)} MB`,
+          }))}
         />
         <p className="mt-2 px-1 text-[0.8rem] leading-snug text-muted">{model.blurb}</p>
       </div>

@@ -144,6 +144,15 @@ export const DEFAULT_SETTINGS = {
    * The app is fully usable audio-only if this is never turned on.
    */
   whisperEnabled: false,
+  /**
+   * 'distil-small' is the approved target (small-class accuracy, clears the
+   * watchdog where whisper-small.en would not). It is NOT the default yet, on
+   * purpose: no model has ever created a session on this phone (DECISIONS §18,
+   * still open), and that diagnosis runs on tiny — a 41 MB download rather than
+   * 172 MB, and the model every previous failure was recorded against. Changing
+   * the weights and chasing the load bug at the same time is how you end up
+   * unable to say which one moved. Flip this once §18 is named.
+   */
   whisperModel: 'tiny',
   /**
    * 'wasm' (CPU only) or 'auto' (try WebGPU first).

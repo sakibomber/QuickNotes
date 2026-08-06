@@ -27,16 +27,21 @@
  * MatMulNBits is 4-bit, so a q4 tensor reached the WASM execution provider,
  * which cannot handle it — q4 is effectively WebGPU-only. Asking for 'q8' as a
  * bare string did not prevent that, so the format is now pinned per module.
- *
- * Sizes are for the Small model; Better is roughly double.
  */
 export const FORMATS = {
   balanced: {
     id: 'balanced',
     label: 'Balanced',
     simple: 'q8',
-    blurb: '8-bit. Works on the CPU. Start here.',
+    blurb: '8-bit. The smallest download, and the only one the CPU reliably runs. Start here.',
     dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' },
+  },
+  half: {
+    id: 'half',
+    label: 'Closer to original',
+    simple: 'fp16',
+    blurb: '16-bit. Bigger, but nearer the original if 8-bit gets words wrong.',
+    dtype: { encoder_model: 'fp16', decoder_model_merged: 'fp16' },
   },
   original: {
     id: 'original',
@@ -45,11 +50,19 @@ export const FORMATS = {
     blurb: 'Full precision. Biggest download, but the most likely to run anywhere.',
     dtype: { encoder_model: 'fp32', decoder_model_merged: 'fp32' },
   },
+  /**
+   * Kept as `smallest` because that id is already saved in people's settings.
+   * The NAME was a lie and is now fixed: q4 quantizes the matmul weights but
+   * leaves the embedding table at full precision, so at every model size the
+   * q4 download is LARGER than q8 — 96 MB vs 41 MB on tiny, 251 MB vs 172 MB
+   * on distil-small. It was never the smallest anything. It is bigger AND
+   * CPU-incompatible, so it is listed last and recommended to nobody.
+   */
   smallest: {
     id: 'smallest',
-    label: 'Smallest',
+    label: '4-bit (graphics chip only)',
     simple: 'q4',
-    blurb: '4-bit. Needs the graphics chip — will not create a session on the CPU.',
+    blurb: 'Needs the graphics chip, and downloads MORE than Balanced. Only worth trying on WebGPU.',
     dtype: { encoder_model: 'q4', decoder_model_merged: 'q4' },
   },
 }
@@ -109,22 +122,51 @@ export async function clearModelCache() {
   return removed
 }
 
+/**
+ * Models, and where these numbers come from.
+ *
+ * Every size below is the sum of the two files the pipeline actually fetches —
+ * `encoder_model` + `decoder_model_merged` — read from the repo's own file
+ * listing, in decimal MB. They are not estimates and not scaled from each
+ * other, because that is exactly how the previous table went wrong: it claimed
+ * 28 MB for tiny/q4 (really 96) and 50 MB for base/q4 (really 142). A number
+ * under a button has to be the number that gets downloaded, or the button is
+ * lying — the same defect §17 was supposed to have fixed.
+ *
+ * Labels say what they load. The old table called tiny.en "Small" and base.en
+ * "Better", so the app has been running the 39M-parameter model under a button
+ * that read Small. Whisper's own size names are now used plainly.
+ */
 const MODELS = {
   tiny: {
     id: 'tiny',
     repo: 'onnx-community/whisper-tiny.en',
-    label: 'Small',
-    // Download size depends on BOTH model and format. Quoting the model
-    // number alone is what made a 186 MB download sit under a "42 MB" button.
-    sizes: { balanced: 42, original: 155, smallest: 28 },
-    blurb: 'Quickest. Good enough for most notes.',
+    label: 'Quickest (tiny)',
+    sizes: { balanced: 41, half: 76, original: 151, smallest: 96 },
+    blurb: 'Fastest, least accurate. Good for a shopping list, not for a script you will read out.',
   },
   base: {
     id: 'base',
     repo: 'onnx-community/whisper-base.en',
-    label: 'Better',
-    sizes: { balanced: 78, original: 290, smallest: 50 },
-    blurb: 'Slower, more accurate. Try this if Small gets words wrong.',
+    label: 'Middle (base)',
+    sizes: { balanced: 77, half: 146, original: 291, smallest: 142 },
+    blurb: 'Twice the download, noticeably better words.',
+  },
+  /**
+   * The target. Distilled from whisper-small: the full encoder with a 4-layer
+   * decoder instead of 12, published as within ~1% WER of its teacher at
+   * several times the speed. Chosen over whisper-small.en itself (249 MB q8,
+   * ~5–10× realtime on CPU) because small-class ACCURACY is the requirement —
+   * notes get read out verbatim at appointments — and small.en would sit
+   * astride the 6× watchdog on the CPU-only path, i.e. fail the requirement by
+   * never finishing.
+   */
+  'distil-small': {
+    id: 'distil-small',
+    repo: 'onnx-community/distil-small.en',
+    label: 'Most accurate (distil-small)',
+    sizes: { balanced: 172, half: 333, original: 665, smallest: 251 },
+    blurb: 'Biggest download, best words. Use this if notes get read out loud.',
   },
 }
 
