@@ -315,6 +315,47 @@ Rather than guess between them — the mistake that cost three deploy cycles on 
 
 The next report should name the cause rather than requiring another round of inference.
 
+## 19. §18 named: an upstream runtime change, not our dtype plumbing (2026-08-05)
+
+The load failure is diagnosed, and it took no device round to do it. It is a known ONNX Runtime regression with our exact error string and our exact tensor name: [onnxruntime#28306](https://github.com/microsoft/onnxruntime/issues/28306) and [transformers.js#1707](https://github.com/huggingface/transformers.js/issues/1707).
+
+**From ORT 1.25 the extended-level QDQ transformer rewrites `DequantizeLinear`+`MatMul` into `MatMulNBits`, and that rewrite requires scale tensors which Whisper ONNX exports published before it do not carry.** The same models load on 1.24. `@huggingface/transformers` 4.2.0 pins `onnxruntime-web` 1.26.0-dev, so we are on the far side of the change.
+
+**The reasoning error, recorded because it is the expensive part.** §18 argued: *"fp32 cannot produce a MatMulNBits error — MatMulNBits is 4-bit only. So the requested dtype is not reaching file resolution."* The premise is false. `MatMulNBits` is what the optimizer was trying to **build**, not what it read; a q8 QDQ model produces this error. That one inference generated both candidates — wrong per-module keys, poisoned cache — and neither existed. Four deploy cycles were spent below a wrong premise, and the instrumentation added to tell (a) from (b) was answering a question with no correct answer in it. The lesson is narrow and worth keeping: **an error names the operation that failed, not the input that caused it.**
+
+**Fix: cap graph optimization at `basic`.** The failing pass lives at `extended`, and ORT's levels are cumulative, so `basic` turns it off while keeping constant folding and dead-node elimination. `disabled` would also work and costs more for nothing. Applied to every attempt in `loadWhisper`, and recorded per-attempt so "Copy what it tried" reports the level it ran at.
+
+**This is not escapable by choosing a different model.** `onnx-community/distil-small.en` — the approved target — was last published **October 2024**, well before the runtime change, so it carries the same defect. Checked rather than assumed.
+
+> **All speed measurements from here forward run under `basic`.** This is load-bearing for the go/no-go thresholds: `extended` is also where the transformer fusions live, so capping it may make inference measurably slower. Measuring under `extended` would be measuring a configuration that cannot create a session. The ~2× ship / ~3–4× stop thresholds are therefore evaluated against what actually ships.
+
+**Still open, low priority:** why the fp32 rung also failed on device. fp32 has no `DequantizeLinear` nodes, so it cannot trigger this pass, and upstream names fp32 as the escape hatch. The likeliest answer is that fp32 was served a cached q8 artifact — exactly what the hard cache-clear in `0507095` was built to eliminate and has never been run on a phone. Worth one attempt only if q8 does not now work.
+
+## 20. Model labels were lying in three places (2026-08-05)
+
+Same defect §17 was supposed to have closed — a name or a number under a button that is not what gets fetched.
+
+1. **`whisper-tiny.en` shipped under a button reading "Small"**, and `base.en` under "Better". Four device rounds ran against the 39M-parameter model while the UI claimed small-class. This one mattered: "small-class, not tiny" was a deliberate accuracy decision, and the app had silently never implemented it.
+2. **The q4 sizes were guessed.** 28 MB quoted for tiny/q4 against a real 96 MB; 50 MB for base/q4 against a real 142 MB. q4 quantizes the matmul weights and leaves the embedding table at full precision, so **q4 is larger than q8 at every model size** — "Smallest" was never smallest, and is both bigger and CPU-incompatible. Renamed, listed last, recommended to nobody.
+3. **The model picker rendered "undefined MB"** — it read `m.approxMB`, a property that does not exist on those objects. §17 fixed the download button and missed the dropdown three lines below it.
+
+Every size is now the sum of the two files the pipeline actually fetches (`encoder_model` + `decoder_model_merged`), read from each repo's own file listing rather than scaled from a neighbour. Three tests hold the line: every model×format pair has a measured number, nothing may claim q4 is smallest, and every label must name its repo.
+
+**Target model: `distil-small.en` at q8 (172 MB).** The full whisper-small encoder with a 4-layer decoder instead of 12 — published as within ~1% WER of its teacher at several times the speed. Chosen over `whisper-small.en` itself (249 MB q8, est. 5–10× realtime on CPU) because the requirement is small-class **accuracy** — notes get read out verbatim at appointments — and small.en would sit astride the 6× watchdog on the CPU-only path, failing the requirement by never finishing. fp16 (333 MB) is the documented fallback if q8 accuracy disappoints on real notes.
+
+**Watchdog stays at 6×.** If measured numbers put real notes near it, the answer is minutes-long background transcription with visible queue state, not a raised ceiling. Capture is never blocked by transcription.
+
+**Default stays on `tiny` until §18 is confirmed fixed on device.** Changing the weights and the load path in the same round is how you lose track of which one moved.
+
+## 21. The mic instrument was not testing the app (2026-08-05)
+
+Two defects in the diagnostic itself, found auditing the instrument rather than the result. Both matter beyond this handset: the sweep is the self-correcting hardware check for everyone else who installs this, so a wrong answer delivered confidently is worse than no check at all.
+
+1. **Steps 5 and 7 built a `Recorder` with no `audioProfile`**, so they always measured `processed`. Once the sweep has applied `raw`, the check a user runs — and copies to us — is testing a configuration the app is not using.
+2. **A speech-first combination that could not open the recorder abandoned its probe un-stopped.** A live recogniser carried into the next combination, which would report that contamination as its own result. The 700 ms settle never covered it, because nothing was ever told to stop. `probe()` now takes an `AbortSignal`, and the caller aborts **and awaits** — told-to-stop is not stopped.
+
+Both regression tests were watched failing against the reintroduced bugs before they passed (§14's rule). The leak test reports **2** live recognisers, one per speech-first combination — the mechanism confirmed rather than inferred. Its stub deliberately disables auto-end, because a recogniser that tidies itself up after 10 ms would hide a leaked one and the test would pass against the bug.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

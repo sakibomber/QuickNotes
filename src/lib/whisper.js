@@ -70,6 +70,39 @@ export const FORMATS = {
 export const FORMAT_LIST = Object.values(FORMATS)
 
 /**
+ * ONNX Runtime graph optimization level — the fix for DECISIONS.md §18.
+ *
+ * Every format failed to create a session with:
+ *   qdq_actions.cc TransposeDQWeightsForMatMulNBits
+ *   Missing required scale: model.decoder.embed_tokens.weight_merged_0_scale
+ *
+ * §18 read that as "MatMulNBits is 4-bit, so something 4-bit is loading no
+ * matter what we ask for" and went hunting for wrong dtype keys or a poisoned
+ * cache. Both were dead ends, because the premise was wrong: MatMulNBits is
+ * what the optimizer was trying to BUILD, not what it read. From ORT 1.25 the
+ * extended-level QDQ transformer rewrites DequantizeLinear+MatMul into
+ * MatMulNBits, and that rewrite needs scale tensors which Whisper ONNX exports
+ * published before it do not carry. Upstream: onnxruntime#28306 and
+ * transformers.js#1707, the latter with this exact tensor name on a q8 decoder.
+ *
+ * That pass lives at the `extended` level, and ORT's levels are cumulative, so
+ * capping at `basic` is the dial that turns it off. `disabled` would also work
+ * and costs more speed for nothing.
+ *
+ * Not device-specific and not fixable by choosing a different model: our target
+ * export (distil-small.en) was last published in October 2024, well before the
+ * runtime change, so it carries the same defect.
+ *
+ * THE COST, stated because it lands on the one number this feature is judged
+ * on: `extended` is also where the transformer fusions live. Capping at `basic`
+ * may make inference measurably slower. Every speed figure from here forward is
+ * therefore measured under `basic` — which is what ships, so the go/no-go
+ * thresholds are being evaluated against the real thing rather than a
+ * configuration that cannot create a session.
+ */
+const GRAPH_OPTIMIZATION = 'basic'
+
+/**
  * The attempt ladder.
  *
  * Every format — including fp32 — failed with the same MatMulNBits error, and
@@ -331,6 +364,7 @@ export async function loadWhisper(
       backend === 'auto' && (await hasWebGPU()) ? ['webgpu', 'wasm'] : ['wasm']
 
     const rungs = attemptsFor(format)
+    const sessionOptions = { graphOptimizationLevel: GRAPH_OPTIMIZATION }
     let lastError = null
     loadAttempts = []
 
@@ -347,6 +381,7 @@ export async function loadWhisper(
           const pipe = await pipeline('automatic-speech-recognition', model.repo, {
             device,
             dtype: rung.dtype,
+            session_options: sessionOptions,
             progress_callback,
           })
           loadedBackend = device
@@ -355,6 +390,7 @@ export async function loadWhisper(
             label: rung.label,
             device,
             dtype: rung.dtype,
+            optimization: GRAPH_OPTIMIZATION,
             files: onnxFiles(),
             ok: true,
           })
@@ -367,6 +403,7 @@ export async function loadWhisper(
             label: rung.label,
             device,
             dtype: rung.dtype,
+            optimization: GRAPH_OPTIMIZATION,
             files,
             ok: false,
             reason: String(err?.message || err),

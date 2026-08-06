@@ -254,6 +254,7 @@ export default function WhisperPanel({ onToast }) {
                   [
                     `[${a.ok ? 'OK' : 'FAIL'}] ${a.label} on ${a.device}`,
                     `  asked for: ${JSON.stringify(a.dtype)}`,
+                    `  graph optimization: ${a.optimization || 'default'}`,
                     `  files fetched: ${a.files.length ? a.files.join(', ') : '(none — served from cache?)'}`,
                     ...(a.reason ? [`  error: ${a.reason}`] : []),
                   ].join('\n')
