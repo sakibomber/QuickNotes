@@ -655,6 +655,9 @@ export function StoreProvider({ children }) {
           const result = await transcribeBlobDetailed(row.blob, {
             modelId: settingsRef.current.whisperModel,
             backend: settingsRef.current.whisperBackend,
+            // Was missing: the queue loaded 'balanced' whatever the user chose,
+            // which would fetch a second copy of the model in another format.
+            format: settingsRef.current.whisperFormat,
           })
 
           // Never overwrite words the user typed while this was running.
@@ -684,6 +687,29 @@ export function StoreProvider({ children }) {
           const wasWebGPU = err?.backend === 'webgpu'
           const { unloadWhisper } = await import('./whisper.js')
           await unloadWhisper()
+
+          /**
+           * The model has been evicted. Chrome can reclaim Cache Storage under
+           * pressure, and the note queue must not answer that by silently
+           * pulling 172 MB down again — consent for the first download is not
+           * consent for a surprise one on mobile data.
+           *
+           * Every waiting note goes to 'blocked', not 'failed': nothing is
+           * wrong with them, and marking them failed would bury the real
+           * problem under a list of individual errors.
+           */
+          if (err?.name === 'ModelEvictedError') {
+            const waiting = notesRef.current.filter(
+              (n) => n.transcribeState === 'pending' || n.transcribeState === 'running'
+            )
+            await Promise.all(
+              waiting.map((n) =>
+                patchNote(n.id, { transcribeState: 'blocked', transcribeError: null })
+              )
+            )
+            showToast('The write-up model is gone from this phone — open Settings', { ms: 5000 })
+            break
+          }
 
           if (timedOut && wasWebGPU && settingsRef.current.whisperBackend !== 'wasm') {
             await setSetting('whisperBackend', 'wasm')
@@ -726,15 +752,32 @@ export function StoreProvider({ children }) {
     return failed.length
   }, [patchNote, runTranscriptionQueue])
 
+  /**
+   * Releases notes parked by an eviction. Called once the model is back, so
+   * a re-download resumes the backlog instead of leaving it stranded in a
+   * state nothing clears.
+   */
+  const unblockTranscription = useCallback(async () => {
+    const blocked = notesRef.current.filter((n) => n.transcribeState === 'blocked')
+    if (!blocked.length) return 0
+    await Promise.all(
+      blocked.map((n) => patchNote(n.id, { transcribeState: 'pending', transcribeError: null }))
+    )
+    runTranscriptionQueue()
+    return blocked.length
+  }, [patchNote, runTranscriptionQueue])
+
   /** Counts for the UI, so a stalled queue is visible rather than inferred. */
   const transcribeCounts = useMemo(() => {
     let pending = 0
     let failed = 0
+    let blocked = 0
     for (const n of notes) {
       if (n.transcribeState === 'pending' || n.transcribeState === 'running') pending++
       else if (n.transcribeState === 'failed') failed++
+      else if (n.transcribeState === 'blocked') blocked++
     }
-    return { pending, failed }
+    return { pending, failed, blocked }
   }, [notes])
 
   // Resume on launch: anything left 'running' when the app died goes back to
@@ -837,6 +880,7 @@ export function StoreProvider({ children }) {
     transcribing,
     enqueueTranscription,
     retryAllTranscription,
+    unblockTranscription,
     transcribeCounts,
     runTranscriptionQueue,
   }

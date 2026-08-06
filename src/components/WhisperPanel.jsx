@@ -10,16 +10,20 @@
  * per pass, and the realtime factor — because "it felt slow" is not a result.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   FORMAT_LIST,
   WHISPER_MODELS,
   approxDownloadMB,
   clearModelCache,
+  deleteModelCache,
   lastLoadAttempts,
   hasWebGPU,
   loadWhisper,
   loadedModel,
+  modelCacheReport,
+  requestPersistence,
+  storageReport,
   wasmSource,
 } from '../lib/whisper.js'
 import { TRANSCRIBERS } from '../lib/transcribe.js'
@@ -27,6 +31,7 @@ import { bytes } from '../lib/format.js'
 import { copyText } from '../lib/text.js'
 import Icon from './Icon.jsx'
 import Button, { Segmented } from './Button.jsx'
+import { ConfirmSheet } from './Sheet.jsx'
 import { useStore } from '../lib/store.jsx'
 
 export default function WhisperPanel({ onToast }) {
@@ -38,6 +43,7 @@ export default function WhisperPanel({ onToast }) {
     getAudio,
     runTranscriptionQueue,
     retryAllTranscription,
+    unblockTranscription,
     transcribeCounts,
   } = useStore()
   const [progress, setProgress] = useState(null)
@@ -49,10 +55,45 @@ export default function WhisperPanel({ onToast }) {
   const [wasm, setWasm] = useState(null)
   const [errorText, setErrorText] = useState(null)
   const [attempts, setAttempts] = useState([])
+  const [cache, setCache] = useState(null)
+  const [storage, setStorage] = useState(null)
+  /** The model you just switched away from, if it is still taking up space. */
+  const [supersede, setSupersede] = useState(null)
+
+  /** What is actually stored, read from the phone rather than assumed. */
+  const refreshStorage = useCallback(async () => {
+    const [report, space] = await Promise.all([modelCacheReport(), storageReport()])
+    setCache(report)
+    setStorage(space)
+    return report
+  }, [])
 
   useEffect(() => {
     hasWebGPU().then(setGpu)
-  }, [])
+    refreshStorage()
+  }, [refreshStorage])
+
+  /**
+   * Switching models leaves the old one on disk. Three models at three formats
+   * is most of a gigabyte, and nobody should have to remember what they
+   * downloaded to get the space back — so the offer is made at the moment the
+   * old one stops being useful, with the number attached.
+   */
+  const chooseModel = async (id) => {
+    const previous = settings.whisperModel
+    await setSetting('whisperModel', id)
+    const report = await refreshStorage()
+    if (previous === id) return
+    const old = report.models.find((m) => m.id === previous && m.stored)
+    if (old?.bytes) setSupersede(old)
+  }
+
+  const removeModel = async (id, { quiet = false } = {}) => {
+    const { bytes: freed } = await deleteModelCache(id)
+    await refreshStorage()
+    if (!quiet) onToast?.(freed ? `Freed ${bytes(freed)}` : 'Nothing to delete', 'good')
+    return freed
+  }
 
   const model = WHISPER_MODELS.find((m) => m.id === settings.whisperModel) || WHISPER_MODELS[0]
   const waiting = notes.filter(
@@ -82,7 +123,13 @@ export default function WhisperPanel({ onToast }) {
       setWasm(await wasmSource())
       setReady(true)
       await setSetting('whisperEnabled', true)
+      // A 172 MB model is a fat target for Chrome's storage reclaim. Ask for
+      // persistence at the moment there is something worth persisting.
+      await requestPersistence()
+      await refreshStorage()
       onToast?.('Ready — your notes will be written up automatically', 'good')
+      // Anything parked by an earlier eviction can move again now.
+      await unblockTranscription()
       runTranscriptionQueue()
     } catch (err) {
       setErrorText(String(err?.message || err))
@@ -114,6 +161,9 @@ export default function WhisperPanel({ onToast }) {
         backend: settings.whisperBackend,
         format: settings.whisperFormat,
         onProgress: setProgress,
+        // Someone standing in Settings pressing Test has consented to a
+        // download. The background queue has not, and never passes this.
+        allowDownload: true,
       })
       setBench(result)
       setWasm(await wasmSource())
@@ -147,7 +197,7 @@ export default function WhisperPanel({ onToast }) {
         <div className="mb-2 px-1 text-[0.85rem] text-muted">Which one</div>
         <Segmented
           value={settings.whisperModel}
-          onChange={(v) => setSetting('whisperModel', v)}
+          onChange={chooseModel}
           // `m.approxMB` does not exist — this rendered "· undefined MB". The size
           // depends on model AND format, which is the whole point of the matrix.
           options={WHISPER_MODELS.map((m) => ({
@@ -156,6 +206,92 @@ export default function WhisperPanel({ onToast }) {
           }))}
         />
         <p className="mt-2 px-1 text-[0.8rem] leading-snug text-muted">{model.blurb}</p>
+      </div>
+
+      {/* What is on the phone, and how to get the space back. Read from Cache
+          Storage rather than inferred from settings — the whole point is that
+          nobody should have to remember what they downloaded. */}
+      <div className="rounded-xl border border-line bg-surface2 px-3 py-3">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[0.85rem] text-ink">Downloaded on this phone</span>
+          {cache?.totalBytes > 0 && (
+            <span className="text-[0.8rem] text-muted">{bytes(cache.totalBytes)} total</span>
+          )}
+        </div>
+
+        {cache && !cache.models.some((m) => m.stored) && (
+          <p className="mt-1.5 text-[0.8rem] leading-snug text-muted">
+            Nothing downloaded yet.
+          </p>
+        )}
+
+        <ul className="mt-2 space-y-1.5">
+          {cache?.models
+            .filter((m) => m.stored || m.bytes > 0)
+            .map((m) => (
+              <li key={m.id} className="flex items-center gap-2.5">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[0.82rem] leading-snug text-ink">
+                    {m.label}
+                    {m.id === settings.whisperModel ? ' · in use' : ''}
+                  </span>
+                  <span className="block text-[0.78rem] text-muted">
+                    {bytes(m.bytes)}
+                    {!m.stored ? ' · incomplete' : ''}
+                  </span>
+                </span>
+                <Button
+                  variant="quiet"
+                  icon="trash"
+                  onClick={async () => {
+                    if (m.id === settings.whisperModel) {
+                      const { unloadWhisper } = await import('../lib/whisper.js')
+                      await unloadWhisper()
+                      setReady(false)
+                      await setSetting('whisperEnabled', false)
+                    }
+                    await removeModel(m.id)
+                  }}
+                >
+                  Delete
+                </Button>
+              </li>
+            ))}
+        </ul>
+
+        {/* Persistence is the difference between "cached" and "kept". A silent
+            refusal looks exactly like a grant until the model disappears. */}
+        {storage?.supported && (
+          <div className="mt-2.5 border-t border-linesoft pt-2.5">
+            <p className="text-[0.78rem] leading-snug text-muted">
+              {storage.persisted === true
+                ? 'Android has been told to keep this app’s data. Downloads should survive.'
+                : storage.persisted === false
+                  ? 'Android has NOT promised to keep this app’s data — it can be cleared when the phone runs low.'
+                  : 'This phone will not say whether it keeps this app’s data.'}
+              {storage.usage != null && storage.quota
+                ? ` Using ${bytes(storage.usage)} of ${bytes(storage.quota)}.`
+                : ''}
+            </p>
+            {storage.persisted === false && (
+              <Button
+                variant="quiet"
+                full
+                icon="check"
+                onClick={async () => {
+                  const ok = await requestPersistence()
+                  await refreshStorage()
+                  onToast?.(
+                    ok ? 'Android will keep it' : 'Android refused — it may still be cleared',
+                    ok ? 'good' : undefined
+                  )
+                }}
+              >
+                Ask Android to keep it
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       <Button
@@ -170,14 +306,35 @@ export default function WhisperPanel({ onToast }) {
           setAttempts([])
           setErrorText(null)
           await setSetting('whisperEnabled', false)
+          await refreshStorage()
           onToast?.(
-            removed.length ? 'Downloaded model cleared' : 'Nothing was cached',
+            removed.length ? 'Every downloaded model cleared' : 'Nothing was cached',
             'good'
           )
         }}
       >
-        Delete the downloaded model and start over
+        Delete every downloaded model and start over
       </Button>
+
+      <ConfirmSheet
+        open={!!supersede}
+        onClose={() => setSupersede(null)}
+        title="Delete the one you were using?"
+        confirmLabel="Delete it"
+        cancelLabel="Keep both"
+        message={
+          supersede
+            ? `You switched to ${model.label}. The one you were using — ${supersede.label} — is ` +
+              `still on the phone, taking up ${bytes(supersede.bytes)}. Deleting it frees that ` +
+              'space, and you can download it again any time. Your notes and recordings are not affected.'
+            : ''
+        }
+        onConfirm={() => {
+          // Read the id now: onClose fires straight after this and clears it.
+          const id = supersede?.id
+          if (id) removeModel(id)
+        }}
+      />
 
       <div>
         <div className="mb-2 px-1 text-[0.85rem] text-muted">Format</div>

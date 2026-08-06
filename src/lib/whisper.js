@@ -135,9 +135,16 @@ function attemptsFor(formatId) {
 }
 
 /**
- * Deletes every cached model file. transformers.js caches by URL in Cache
- * Storage, so a bad artifact survives reloads and every retry returns it —
- * which is indistinguishable from "the setting does nothing".
+ * Deletes EVERY cached model file, for every model. The blunt instrument.
+ *
+ * This is now only reachable from the "delete everything and start over"
+ * button. It used to run before every single load attempt, to rule out a
+ * poisoned artifact while §18 was open — which was the right call then and is
+ * actively harmful now: §19 named the real cause, and with a working load path
+ * a blanket clear before each attempt means every cold start re-downloads the
+ * whole model. At 172 MB, on a phone, possibly on mobile data.
+ *
+ * Prefer `deleteModelCache(id)`, which removes one model and leaves the rest.
  */
 export async function clearModelCache() {
   const removed = []
@@ -211,6 +218,148 @@ export function approxDownloadMB(modelId, formatId) {
   return m.sizes[formatId] ?? m.sizes.balanced
 }
 
+/* --------------------------------------------------------- model storage */
+
+/**
+ * What is ACTUALLY on the phone, read from Cache Storage rather than inferred
+ * from settings.
+ *
+ * Three models at three formats is most of a gigabyte, and nobody should have
+ * to remember what they downloaded in order to get the space back. Sizes are
+ * measured from the cached responses, so this reports what is stored, not what
+ * we predicted would be stored — the same rule as the download-size matrix.
+ */
+async function eachModelEntry(fn) {
+  if (!globalThis.caches?.keys) return
+  for (const name of await caches.keys()) {
+    if (!/transformers|onnx|huggingface|hf/i.test(name)) continue
+    const cache = await caches.open(name)
+    for (const request of await cache.keys()) {
+      await fn({ cache, request, url: request.url })
+    }
+  }
+}
+
+/** Bytes held by one cached response, without reading the whole body if we can. */
+async function entryBytes(cache, request) {
+  try {
+    const res = await cache.match(request)
+    if (!res) return 0
+    const len = res.headers.get('content-length')
+    if (len) return Number(len) || 0
+    return (await res.clone().blob()).size
+  } catch {
+    return 0
+  }
+}
+
+/** Which model a cached URL belongs to, or null. Matched on the repo path. */
+function modelForUrl(url) {
+  for (const model of Object.values(MODELS)) {
+    if (url.includes(`/${model.repo}/`)) return model
+  }
+  return null
+}
+
+/**
+ * Per-model storage report: what is downloaded, and how much space it holds.
+ * `bytes` is 0 for a model that is not stored at all.
+ */
+export async function modelCacheReport() {
+  const totals = new Map()
+  try {
+    await eachModelEntry(async ({ cache, request, url }) => {
+      const model = modelForUrl(url)
+      if (!model) return
+      const row = totals.get(model.id) || { weights: 0, bytes: 0 }
+      row.bytes += await entryBytes(cache, request)
+      if (/\.onnx/i.test(url)) row.weights++
+      totals.set(model.id, row)
+    })
+  } catch (err) {
+    console.warn('[quick-notes] could not read the model cache', err)
+  }
+  const models = Object.values(MODELS).map((m) => {
+    const row = totals.get(m.id) || { weights: 0, bytes: 0 }
+    return {
+      id: m.id,
+      label: m.label,
+      repo: m.repo,
+      bytes: row.bytes,
+      // Both weight files have to be present for the model to be usable. One
+      // of two is an interrupted download or a partial eviction, not a model.
+      stored: row.weights >= 2,
+      weights: row.weights,
+    }
+  })
+  return { models, totalBytes: models.reduce((sum, m) => sum + m.bytes, 0) }
+}
+
+/** Deletes one model's files and leaves every other model alone. */
+export async function deleteModelCache(modelId) {
+  const model = MODELS[modelId]
+  if (!model) return { bytes: 0, files: 0 }
+  let bytes = 0
+  let files = 0
+  try {
+    const doomed = []
+    await eachModelEntry(async ({ cache, request, url }) => {
+      if (!url.includes(`/${model.repo}/`)) return
+      bytes += await entryBytes(cache, request)
+      doomed.push({ cache, request })
+    })
+    for (const { cache, request } of doomed) {
+      if (await cache.delete(request)) files++
+    }
+  } catch (err) {
+    console.warn('[quick-notes] could not delete the model', err)
+  }
+  return { bytes, files }
+}
+
+/** Is this model actually still on the phone? The eviction check. */
+export async function isModelCached(modelId) {
+  const { models } = await modelCacheReport()
+  return !!models.find((m) => m.id === modelId)?.stored
+}
+
+/**
+ * Storage permission and headroom.
+ *
+ * `persisted` is the one that matters. Chrome can evict an origin's storage
+ * under pressure unless persistence was granted, and a 172 MB model is a fat
+ * target. §4 already asks for persistence at boot — this reports whether the
+ * ask was actually honoured, because a silent refusal looks identical to a
+ * grant right up until the model disappears.
+ */
+export async function storageReport() {
+  const out = { supported: false, persisted: null, usage: null, quota: null }
+  try {
+    if (!navigator.storage) return out
+    out.supported = true
+    if (navigator.storage.persisted) out.persisted = await navigator.storage.persisted()
+    if (navigator.storage.estimate) {
+      const est = await navigator.storage.estimate()
+      out.usage = est?.usage ?? null
+      out.quota = est?.quota ?? null
+    }
+  } catch (err) {
+    console.warn('[quick-notes] could not read storage state', err)
+  }
+  return out
+}
+
+/** Asks for persistent storage. Safe to call repeatedly. */
+export async function requestPersistence() {
+  try {
+    if (!navigator.storage?.persist) return false
+    if (await navigator.storage.persisted()) return true
+    return await navigator.storage.persist()
+  } catch {
+    return false
+  }
+}
+
 let pipelinePromise = null
 let loadedModelId = null
 let loadedBackend = null
@@ -233,6 +382,22 @@ const WATCHDOG_FLOOR_MS = 45_000
 
 export function watchdogMs(audioSeconds) {
   return Math.max(WATCHDOG_FLOOR_MS, Math.round((audioSeconds || 0) * 1000 * WATCHDOG_FACTOR))
+}
+
+/**
+ * The model was turned on, and is no longer on the phone.
+ *
+ * Chrome can evict Cache Storage under pressure. Without this the next queued
+ * note would quietly re-fetch 172 MB — possibly on mobile data, definitely
+ * without being asked. Consent for the first download is not consent for every
+ * subsequent one, so the queue stops and says so instead.
+ */
+export class ModelEvictedError extends Error {
+  constructor(modelId) {
+    super('The downloaded model is no longer on this phone.')
+    this.name = 'ModelEvictedError'
+    this.modelId = modelId
+  }
 }
 
 export class TranscribeTimeout extends Error {
@@ -370,12 +535,13 @@ export async function loadWhisper(
 
     for (const device of devices) {
       for (const rung of rungs) {
-        // Hard cache-clear before every attempt. transformers.js caches by URL
-        // in Cache Storage, so without this a bad artifact is handed back on
-        // every retry and no dtype change can ever appear to take effect.
-        const cleared = await clearModelCache()
+        // NO cache clear here. It was added to rule out a poisoned artifact
+        // while §18 was open; §19 named the real cause, and clearing before
+        // every attempt now means a 172 MB re-download on every cold start.
+        // "Delete and start over" is a button the user presses, not something
+        // the load path does behind their back.
         filesThisAttempt = new Set()
-        onProgress?.({ phase: 'trying', device, label: rung.label, cleared: cleared.length })
+        onProgress?.({ phase: 'trying', device, label: rung.label })
 
         try {
           const pipe = await pipeline('automatic-speech-recognition', model.repo, {
@@ -492,8 +658,11 @@ async function decodeTo16k(blob) {
  */
 export async function transcribeWithWhisper(
   blob,
-  { modelId = 'tiny', backend = 'wasm', format = 'balanced', onProgress } = {}
+  { modelId = 'tiny', backend = 'wasm', format = 'balanced', onProgress, allowDownload = false } = {}
 ) {
+  // The background queue never downloads. Only a screen where someone has just
+  // agreed to a download passes allowDownload.
+  if (!allowDownload && !(await isModelCached(modelId))) throw new ModelEvictedError(modelId)
   const pipe = await loadWhisper(modelId, { onProgress, backend, format })
   onProgress?.({ phase: 'decoding' })
   const { samples, seconds } = await decodeTo16k(blob)

@@ -356,6 +356,47 @@ Two defects in the diagnostic itself, found auditing the instrument rather than 
 
 Both regression tests were watched failing against the reintroduced bugs before they passed (§14's rule). The leak test reports **2** live recognisers, one per speech-first combination — the mechanism confirmed rather than inferred. Its stub deliberately disables auto-end, because a recogniser that tidies itself up after 10 ms would hide a leaked one and the test would pass against the bug.
 
+## 22. It works. Ship configuration settled (2026-08-05)
+
+The §19 fix was confirmed on device, and on-device transcription works end to end for the first time.
+
+```
+tiny.en q8 · Balanced · WASM        2.6 s audio →  1.0 s     0.40× realtime
+distil-small.en q8 · Balanced · WASM 8.5 s audio →  8.9 s     1.05× realtime
+```
+
+**Ship: `distil-small.en` q8 Balanced on WASM, and it is now the default.** 1.05× realtime is inside the ~2× ship threshold from §12 — on pure CPU, under the capped optimizer. **The §19 speed worry did not materialise**: capping graph optimization at `basic` cost little enough that the thresholds were met anyway. Recorded because §19 said to expect the opposite; the caution was right to state and wrong in outcome, and the numbers are what settle it. WebGPU stays off — it was never needed.
+
+Accuracy on a real note: one error in a seven-state list ("Arkansas" → "Parkinson"). Acceptable **because the audio stays attached**. That is the §5 audit trail doing its job rather than a tolerance for wrong words: a transcript that can be checked against the recording is a different kind of object from one that cannot.
+
+**Cold start passed end to end.** Force-stop → Record shortcut → recording began with zero taps → note saved → live-speech fallback message shown as designed → background write-up picked it up → readable text in the Inbox. The complete loop works on the device, which closes the last item that had never been directly verified.
+
+### Web Speech contention is nondeterministic, not deterministically dead
+
+Two mic/speech runs, same device, seventeen minutes apart:
+
+- **8:01 PM** — main check failed as always, but the sweep showed *Cleaned up · speech-first* **passing**: words heard AND the recording captured at peak 100%. That contradicts §11.
+- **8:18 PM** — same device, same build: all four combinations failed, including that one. Raw audio failed both orderings, consistent with §11.
+
+**Read: the 8:01 pass was flake.** One-off successes are available under contention; reproducible ones are not. This makes abandonment *more* justified, not less — an intermittent transcription path that works once an hour is worse than none, because it teaches you to trust it.
+
+> **Recorded so nobody chases a future one-off pass.** If the sweep ever comes back green on this handset, that is not evidence the contention is solved. It needs to reproduce across separate runs before it means anything. No investigation is warranted on a single pass.
+
+### Found while shipping this: the cache clear had become a bug
+
+`loadWhisper` called `clearModelCache()` **before every attempt** — correct instrumentation while §18 was open and the cache was a live suspect, and actively harmful once the load path worked: every cold start would have deleted and re-downloaded the whole model. At 172 MB, on a phone, potentially on mobile data. Removed from the load path; a blanket clear is now only what the "delete everything" button does.
+
+Related, same shape: the background queue passed `modelId` and `backend` but not `format`, so it loaded Balanced whatever the user had chosen — silently fetching a *second* copy of the model in another format.
+
+### Storage hardening
+
+- **`persisted()` and quota are now reported** in Settings. §4 has always asked for persistence, but nothing checked whether the ask was honoured, and a silent refusal is indistinguishable from a grant right up until the model disappears. Persistence is re-requested at the moment of download, when there is finally something worth persisting.
+- **Eviction blocks the queue rather than re-downloading it.** A new note state, `blocked`, distinct from `failed`: nothing is wrong with those notes, and marking them failed would bury one storage event under a list of individual errors. Consent for the first download is not consent for a surprise one. The backlog is released automatically once the model is back.
+- **`deleteModelCache(id)` removes one model** and leaves the others. The old clear matched on cache *name* and took everything with it.
+- **Per-model sizes and delete controls**, read from Cache Storage rather than inferred from settings — nobody should have to remember what they downloaded to get the space back. Switching models offers to delete the superseded one, with the number attached.
+
+Tests for the two load-bearing rules — delete isolation, and the queue refusing to download — were watched failing against the removed guards before they passed.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

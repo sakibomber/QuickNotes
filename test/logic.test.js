@@ -382,6 +382,92 @@ test('model labels name the model they actually load', async () => {
   }
 })
 
+/* ------------------------------------------------- model cache + eviction */
+
+/**
+ * Minimal Cache Storage stand-in. transformers.js caches model files by URL,
+ * so everything the housekeeping does is URL matching over these entries.
+ */
+function installFakeCaches(urls) {
+  const entries = new Map(urls.map((url) => [url, { size: 1_000_000 }]))
+  const cache = {
+    keys: async () => [...entries.keys()].map((url) => ({ url })),
+    match: async (req) => {
+      if (!entries.has(req.url)) return null
+      return {
+        headers: { get: (h) => (h === 'content-length' ? String(entries.get(req.url).size) : null) },
+        clone: () => ({ blob: async () => ({ size: entries.get(req.url).size }) }),
+      }
+    },
+    delete: async (req) => entries.delete(req.url),
+  }
+  globalThis.caches = {
+    keys: async () => ['transformers-cache'],
+    open: async () => cache,
+    delete: async () => true,
+  }
+  return entries
+}
+
+const TINY = 'https://huggingface.co/onnx-community/whisper-tiny.en/resolve/main/onnx'
+const DISTIL = 'https://huggingface.co/onnx-community/distil-small.en/resolve/main/onnx'
+
+test('deleting one model leaves the others alone', async () => {
+  // ~900 MB of accumulated models is the problem being solved. A delete that
+  // takes the neighbours with it turns housekeeping into a re-download.
+  const entries = installFakeCaches([
+    `${TINY}/encoder_model_quantized.onnx`,
+    `${TINY}/decoder_model_merged_quantized.onnx`,
+    `${DISTIL}/encoder_model_quantized.onnx`,
+    `${DISTIL}/decoder_model_merged_quantized.onnx`,
+  ])
+  const { modelCacheReport, deleteModelCache } = await import('../src/lib/whisper.js')
+
+  const before = await modelCacheReport()
+  assert.equal(before.models.find((m) => m.id === 'tiny').stored, true)
+  assert.equal(before.models.find((m) => m.id === 'distil-small').stored, true)
+
+  const { bytes: freed } = await deleteModelCache('tiny')
+  assert.equal(freed, 2_000_000, 'reports what it actually freed')
+
+  const after = await modelCacheReport()
+  assert.equal(after.models.find((m) => m.id === 'tiny').stored, false)
+  assert.equal(
+    after.models.find((m) => m.id === 'distil-small').stored,
+    true,
+    'deleting tiny must not touch distil-small'
+  )
+  assert.equal(entries.size, 2)
+  delete globalThis.caches
+})
+
+test('half a model is not a model', async () => {
+  // A partial eviction or an interrupted download leaves one weight file. That
+  // is not something to transcribe with, and must not read as "downloaded".
+  installFakeCaches([`${TINY}/encoder_model_quantized.onnx`])
+  const { isModelCached } = await import('../src/lib/whisper.js')
+  assert.equal(await isModelCached('tiny'), false)
+  delete globalThis.caches
+})
+
+test('the queue refuses to re-download an evicted model', async () => {
+  /**
+   * Consent for the first download is not consent for every later one. If
+   * Chrome reclaims the cache, the background queue must stop and say so —
+   * never quietly pull 172 MB down again, possibly on mobile data.
+   *
+   * This also proves the guard runs BEFORE the loader: with an empty cache the
+   * call rejects without importing the transformers chunk at all.
+   */
+  installFakeCaches([])
+  const { transcribeWithWhisper } = await import('../src/lib/whisper.js')
+  await assert.rejects(
+    () => transcribeWithWhisper({}, { modelId: 'distil-small' }),
+    (err) => err.name === 'ModelEvictedError' && err.modelId === 'distil-small'
+  )
+  delete globalThis.caches
+})
+
 /* -------------------------------------------------------------- format */
 
 test('formatting helpers', () => {

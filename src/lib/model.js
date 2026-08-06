@@ -145,15 +145,13 @@ export const DEFAULT_SETTINGS = {
    */
   whisperEnabled: false,
   /**
-   * 'distil-small' is the approved target (small-class accuracy, clears the
-   * watchdog where whisper-small.en would not). It is NOT the default yet, on
-   * purpose: no model has ever created a session on this phone (DECISIONS §18,
-   * still open), and that diagnosis runs on tiny — a 41 MB download rather than
-   * 172 MB, and the model every previous failure was recorded against. Changing
-   * the weights and chasing the load bug at the same time is how you end up
-   * unable to say which one moved. Flip this once §18 is named.
+   * The ship configuration, measured on an S23 Ultra on 2026-08-05 (§22):
+   * distil-small.en q8 on the CPU ran 8.5 s of audio in 8.9 s — 1.05× realtime,
+   * inside the ~2× ship threshold, under the capped optimizer that actually
+   * ships. tiny stays selectable at 0.40× for anyone who wants speed over
+   * accuracy.
    */
-  whisperModel: 'tiny',
+  whisperModel: 'distil-small',
   /**
    * 'wasm' (CPU only) or 'auto' (try WebGPU first).
    *
@@ -227,7 +225,12 @@ export function newNote(fields = {}) {
     /**
      * Written-up-from-voice state. Lives on the note itself so the queue
      * survives an app restart for free — there is no separate queue to lose.
-     *   null | 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+     *   null | 'pending' | 'running' | 'done' | 'failed' | 'skipped' | 'blocked'
+     *
+     * 'blocked' is not a failure of the note: the model was evicted from the
+     * phone, so nothing can be written up until it is downloaded again. Kept
+     * distinct from 'failed' so a single storage event does not read as a list
+     * of individual errors, and so the backlog can be released in one go.
      */
     transcribeState: null,
     transcribeMs: 0,

@@ -658,6 +658,18 @@ function TriageCard({
               <span className="text-[0.8rem] leading-snug text-ink">Writing this one up now…</span>
             </div>
           )}
+          {/* Not a failure of this note. The model was evicted, so nothing can
+              be written up until it is downloaded again — said once, plainly,
+              rather than as an error on every waiting note. */}
+          {note.transcribeState === 'blocked' && (
+            <div className="flex items-center gap-2.5 rounded-xl border border-line bg-surface2 px-3 py-2">
+              <Icon name="warning" size={18} className="shrink-0 text-muted" />
+              <span className="text-[0.8rem] leading-snug text-muted">
+                Waiting — the write-up model is not on this phone any more. Your voice is still
+                here. Open Settings to get it back.
+              </span>
+            </div>
+          )}
           {note.transcribeState === 'failed' && (
             <button
               type="button"
