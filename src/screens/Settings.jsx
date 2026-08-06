@@ -249,6 +249,18 @@ export default function Settings() {
 
           </Section>
 
+          {/* ------------------------------------------------------ setup */}
+          <Section title="Set-up check">
+            <p className="px-1 text-[0.85rem] leading-relaxed text-muted">
+              Walks through the microphone, a test recording, and writing it up — and shows you the
+              words at the end. Worth re-running after a phone update, or if writing-up stops
+              working.
+            </p>
+            <Button variant="solid" full icon="restart" onClick={() => navigate('#/setup')}>
+              Run the set-up check again
+            </Button>
+          </Section>
+
           {/* ------------------------------------------------ microphone */}
           <Section title="Microphone">
             <MicPanel

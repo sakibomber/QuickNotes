@@ -18,10 +18,27 @@ import BucketDetail from './screens/BucketDetail.jsx'
 import Search from './screens/Search.jsx'
 import SettingsScreen from './screens/Settings.jsx'
 import Record from './screens/Record.jsx'
+import Setup from './screens/Setup.jsx'
 
 export default function App() {
-  const { route } = useRouter()
-  const { ready, bootError } = useStore()
+  const { route, navigate } = useRouter()
+  const { ready, bootError, settings } = useStore()
+
+  /**
+   * First run goes to setup — but never at the cost of a capture.
+   *
+   * /record is excluded explicitly. The Record shortcut cold-start is the
+   * whole two-icon design (§9) and it is verified working; a wizard that
+   * intercepts it would trade the app's one job for an onboarding screen.
+   * Someone launching straight into Record is trying not to lose a thought,
+   * and setup can wait until they are done.
+   */
+  useEffect(() => {
+    if (!ready || bootError) return
+    if (settings.setupState !== 'unseen') return
+    if (route.name === 'record' || route.name === 'setup') return
+    navigate('#/setup', { replace: true })
+  }, [ready, bootError, settings.setupState, route.name, navigate])
 
   // Belt and braces against a rubber-banding page behind the fixed layout.
   useEffect(() => {
@@ -39,6 +56,17 @@ export default function App() {
     return (
       <div className="h-full">
         <Record />
+        <Toast />
+      </div>
+    )
+  }
+
+  // Full screen, no nav: setup is a sequence, and a tab bar invites leaving it
+  // half done. Every step still has its own way out.
+  if (route.name === 'setup') {
+    return (
+      <div className="h-full">
+        <Setup />
         <Toast />
       </div>
     )

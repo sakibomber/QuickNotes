@@ -11,7 +11,7 @@ import { createContext, useContext, useEffect, useMemo, useState, useCallback } 
 
 const RouteContext = createContext(null)
 
-export const ROUTES = ['inbox', 'buckets', 'search', 'settings', 'record']
+export const ROUTES = ['inbox', 'buckets', 'search', 'settings', 'record', 'setup']
 
 function parse(hash) {
   const raw = (hash || '').replace(/^#\/?/, '')

@@ -145,6 +145,15 @@ export const DEFAULT_SETTINGS = {
    */
   whisperEnabled: false,
   /**
+   * First-run setup: 'unseen' | 'skipped' | 'done'.
+   *
+   * Gate 4 of that wizard transcribes a recording the user just made and shows
+   * them the words. It exists because §18 shipped a transcription feature that
+   * could not create a session, through four device rounds, without anything in
+   * the app ever attempting the one operation that would have said so.
+   */
+  setupState: 'unseen',
+  /**
    * The ship configuration, measured on an S23 Ultra on 2026-08-05 (§22):
    * distil-small.en q8 on the CPU ran 8.5 s of audio in 8.9 s — 1.05× realtime,
    * inside the ~2× ship threshold, under the capped optimizer that actually

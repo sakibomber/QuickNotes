@@ -397,6 +397,23 @@ Related, same shape: the background queue passed `modelId` and `backend` but not
 
 Tests for the two load-bearing rules — delete isolation, and the queue refusing to download — were watched failing against the removed guards before they passed.
 
+## 23. The set-up check — four gates, each one proved (2026-08-05)
+
+Built because of §18, and shaped by it. A transcription feature shipped that could not create a session, and survived **four device rounds**, because nothing in the app ever attempted the one operation that would have said so. More instrumentation was not the cure. Doing the real thing once, in front of the user, before they depend on it, is.
+
+| Gate | Proves | Why it is not assumable |
+|---|---|---|
+| 1 · Microphone | Permission granted from inside a real tap | A WebAPK is a separate Android package and will not prompt outside a gesture (§9 bug 2) |
+| 2 · Test recording | Record 5 s, play it back, "did you hear yourself?" | The only check that distinguishes a working microphone from a deaf one — the failure the level meter was built for |
+| 3 · Model download | The real size, in plain words, on wi-fi, cancellable | Consent, stated up front, with the number from the corrected matrix |
+| 4 · **Test transcription** | Writes up the gate-2 recording and **shows the words** | **This is the gate that would have caught §18 on day one.** Everything upstream of it can pass while the thing itself is broken |
+
+**"Not now" is a first-class answer at every gate**, and the footer carries a permanent *"Skip the rest — just let me record"*. Capture works audio-only and always has. Re-runnable from Settings → Set-up check, because a model eviction or an Android update can invalidate any gate after the fact.
+
+**`/record` is explicitly excluded from the first-run redirect**, and there is a test that fails if that exclusion is removed. The two-icon design lives on the shortcut cold-starting straight into a recording — verified working on device in §22 — and someone launching into Record is trying not to lose a thought. An onboarding screen in front of that would trade the app's one job for a form. This is the single most important line in the wizard.
+
+Constraints carried in from the audit: processed audio only (§11 — raw breaks the recording here, so nothing in setup may choose it), transcription after capture only, and the test clip is never written to the note store — it is not a note and must not become one just to be played back once.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype

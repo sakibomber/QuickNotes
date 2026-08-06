@@ -228,7 +228,7 @@ async function go(hash) {
 
 /* ------------------------------------------------------------- tests */
 
-test('boots into the inbox with the first-run notes waiting', async () => {
+async function mount() {
   await act(async () => {
     root.render(
       <React.StrictMode>
@@ -240,6 +240,43 @@ test('boots into the inbox with the first-run notes waiting', async () => {
       </React.StrictMode>
     )
   })
+}
+
+test('a fresh install opens the set-up check', async () => {
+  // §18 shipped a transcription feature that could not create a session,
+  // through four device rounds, because nothing ever attempted the operation
+  // that would have said so. The wizard is that attempt, made in front of the
+  // user before they depend on it.
+  await mount()
+  await waitForText(/Setting up/)
+  assert.match(text(), /Let the app hear you/, 'gate 1 is the microphone')
+  assert.match(text(), /Step 1 of 4/)
+})
+
+test('the Record shortcut is never hijacked by set-up', async () => {
+  /**
+   * The two-icon design (§9) lives or dies on the shortcut cold-starting
+   * straight into a recording, and that path was only just verified working on
+   * device. Someone launching into /record is trying not to lose a thought;
+   * an onboarding screen in front of it trades the app's one job for a form.
+   * Set-up is still unseen at this point, so the redirect is live and must
+   * decline to fire.
+   */
+  await go('#/record')
+  await waitForText(/Cannot record|Tap = Record/)
+  assert.doesNotMatch(text(), /Setting up/, 'setup must not intercept a capture')
+})
+
+test('set-up can be skipped, and skipping lands you in the inbox', async () => {
+  await go('#/setup')
+  await waitForText(/Setting up/)
+  await click('Skip the rest')
+  await waitForText(/Swipe RIGHT to file it/)
+  assert.match(text(), /Inbox/, 'skipping leaves a usable app, not a dead end')
+})
+
+test('boots into the inbox with the first-run notes waiting', async () => {
+  await mount()
   await waitForText(/Swipe RIGHT to file it/)
 
   assert.match(text(), /Inbox/, 'inbox header')
