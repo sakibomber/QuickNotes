@@ -240,17 +240,22 @@ async function eachModelEntry(fn) {
   }
 }
 
-/** Bytes held by one cached response, without reading the whole body if we can. */
-async function entryBytes(cache, request) {
-  try {
-    const res = await cache.match(request)
-    if (!res) return 0
-    const len = res.headers.get('content-length')
-    if (len) return Number(len) || 0
-    return (await res.clone().blob()).size
-  } catch {
-    return 0
-  }
+/**
+ * Bytes held by one cached response, from the header ONLY.
+ *
+ * The first version fell back to `res.clone().blob()` when there was no
+ * content-length. That reads the entire response into memory — for a model
+ * weight file that is up to 172 MB, per entry, and `isModelCached()` was
+ * calling it on the transcription hot path. It froze the installed app on
+ * open and stalled the queue on its first note. A size readout is a nicety; a
+ * queue that runs is not. Never read a body to weigh it.
+ *
+ * Returns 0 when the header is absent, and the caller reports the size as
+ * approximate rather than pretending it measured something.
+ */
+function entryBytes(res) {
+  const len = res?.headers?.get('content-length')
+  return len ? Number(len) || 0 : 0
 }
 
 /** Which model a cached URL belongs to, or null. Matched on the repo path. */
@@ -271,8 +276,11 @@ export async function modelCacheReport() {
     await eachModelEntry(async ({ cache, request, url }) => {
       const model = modelForUrl(url)
       if (!model) return
-      const row = totals.get(model.id) || { weights: 0, bytes: 0 }
-      row.bytes += await entryBytes(cache, request)
+      const row = totals.get(model.id) || { weights: 0, bytes: 0, unsized: 0 }
+      const res = await cache.match(request)
+      const size = entryBytes(res)
+      if (size) row.bytes += size
+      else row.unsized++
       if (/\.onnx/i.test(url)) row.weights++
       totals.set(model.id, row)
     })
@@ -280,16 +288,21 @@ export async function modelCacheReport() {
     console.warn('[quick-notes] could not read the model cache', err)
   }
   const models = Object.values(MODELS).map((m) => {
-    const row = totals.get(m.id) || { weights: 0, bytes: 0 }
+    const row = totals.get(m.id) || { weights: 0, bytes: 0, unsized: 0 }
+    // Both weight files have to be present for the model to be usable. One of
+    // two is an interrupted download or a partial eviction, not a model.
+    const stored = row.weights >= 2
     return {
       id: m.id,
       label: m.label,
       repo: m.repo,
       bytes: row.bytes,
-      // Both weight files have to be present for the model to be usable. One
-      // of two is an interrupted download or a partial eviction, not a model.
-      stored: row.weights >= 2,
+      stored,
       weights: row.weights,
+      // Some responses carry no content-length, and we will not read a 172 MB
+      // body to find out. Say the number is approximate rather than imply a
+      // measurement that did not happen.
+      approx: row.unsized > 0,
     }
   })
   return { models, totalBytes: models.reduce((sum, m) => sum + m.bytes, 0) }
@@ -305,7 +318,7 @@ export async function deleteModelCache(modelId) {
     const doomed = []
     await eachModelEntry(async ({ cache, request, url }) => {
       if (!url.includes(`/${model.repo}/`)) return
-      bytes += await entryBytes(cache, request)
+      bytes += entryBytes(await cache.match(request))
       doomed.push({ cache, request })
     })
     for (const { cache, request } of doomed) {
@@ -317,10 +330,39 @@ export async function deleteModelCache(modelId) {
   return { bytes, files }
 }
 
-/** Is this model actually still on the phone? The eviction check. */
+/**
+ * Is this model actually still on the phone? The eviction check.
+ *
+ * Runs on the transcription hot path, before every queued note, so it does the
+ * least possible work: count matching weight URLs and stop at two. It never
+ * opens a response and never measures anything. The first version delegated to
+ * `modelCacheReport()`, which weighed every entry — that is what stalled the
+ * queue and janked the app on open.
+ */
 export async function isModelCached(modelId) {
-  const { models } = await modelCacheReport()
-  return !!models.find((m) => m.id === modelId)?.stored
+  const model = MODELS[modelId]
+  if (!model) return false
+  // No Cache Storage at all (jsdom, or a browser without it) — treat as
+  // "cannot prove it is gone" rather than blocking transcription outright.
+  if (!globalThis.caches?.keys) return true
+  let weights = 0
+  try {
+    for (const name of await caches.keys()) {
+      if (!/transformers|onnx|huggingface|hf/i.test(name)) continue
+      const cache = await caches.open(name)
+      for (const request of await cache.keys()) {
+        if (request.url.includes(`/${model.repo}/`) && /\.onnx/i.test(request.url)) {
+          if (++weights >= 2) return true
+        }
+      }
+    }
+  } catch (err) {
+    // A cache we cannot read is not proof of eviction. Failing open keeps the
+    // queue moving; failing closed would stop transcription on a storage hiccup.
+    console.warn('[quick-notes] could not check the model cache', err)
+    return true
+  }
+  return weights >= 2
 }
 
 /**

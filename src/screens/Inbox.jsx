@@ -599,6 +599,12 @@ function TriageCard({
 
   const text = (note.transcript || '').trim()
   const showKeepToggle = !!note.audioBlobId && retention !== 'always'
+  // Waiting on the write-up queue, in any of its forms. Used to keep the body
+  // text and the status line telling the same story.
+  const queued =
+    note.transcribeState === 'pending' ||
+    note.transcribeState === 'running' ||
+    note.transcribeState === 'blocked'
 
   return (
     <div className="animate-deal mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col px-3 pt-3 pb-2">
@@ -630,6 +636,13 @@ function TriageCard({
             <div className="ruled ruled-margin px-4 py-2.5 pl-10">
               {text ? (
                 <p className="text-[1.1rem] leading-8 whitespace-pre-wrap text-ink">{text}</p>
+              ) : queued ? (
+                /* Still in the queue. Saying "no words came through" here
+                   contradicts the status line directly underneath, which says
+                   it is waiting — one note telling you two opposite things. */
+                <p className="text-[1.05rem] leading-8 text-muted">
+                  Nothing written up yet. You can play the recording, or type it in yourself.
+                </p>
               ) : (
                 <p className="text-[1.05rem] leading-8 text-muted">
                   No words came through. Play the recording and type what it says.

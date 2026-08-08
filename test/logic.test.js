@@ -388,14 +388,20 @@ test('model labels name the model they actually load', async () => {
  * Minimal Cache Storage stand-in. transformers.js caches model files by URL,
  * so everything the housekeeping does is URL matching over these entries.
  */
-function installFakeCaches(urls) {
+function installFakeCaches(urls, { contentLength = true } = {}) {
   const entries = new Map(urls.map((url) => [url, { size: 1_000_000 }]))
   const cache = {
     keys: async () => [...entries.keys()].map((url) => ({ url })),
     match: async (req) => {
       if (!entries.has(req.url)) return null
       return {
-        headers: { get: (h) => (h === 'content-length' ? String(entries.get(req.url).size) : null) },
+        // Real HF responses do not always carry content-length. When they do
+        // not, anything that "falls back to reading the body" is reading a
+        // model weight file into memory — which is the round-5 freeze.
+        headers: {
+          get: (h) =>
+            h === 'content-length' && contentLength ? String(entries.get(req.url).size) : null,
+        },
         clone: () => ({ blob: async () => ({ size: entries.get(req.url).size }) }),
       }
     },
@@ -447,6 +453,64 @@ test('half a model is not a model', async () => {
   installFakeCaches([`${TINY}/encoder_model_quantized.onnx`])
   const { isModelCached } = await import('../src/lib/whisper.js')
   assert.equal(await isModelCached('tiny'), false)
+  delete globalThis.caches
+})
+
+test('the eviction check never reads a response body', async () => {
+  /**
+   * Round-5 regression. isModelCached() delegated to modelCacheReport(), which
+   * weighed every entry — and the weigher fell back to res.clone().blob() when
+   * there was no content-length. That reads up to 172 MB into memory, on the
+   * transcription hot path, before every queued note. It froze the installed
+   * app on open and the queue never got past its first note.
+   *
+   * The check runs before every note forever, so this is a permanent
+   * constraint, not a one-off fix: presence only, never measurement.
+   */
+  // No content-length: the exact condition under which the old code reached
+  // for the body. With the header present the regression is invisible, which
+  // is why the first version of this test passed against the bug.
+  installFakeCaches(
+    [`${DISTIL}/encoder_model_quantized.onnx`, `${DISTIL}/decoder_model_merged_quantized.onnx`],
+    { contentLength: false }
+  )
+  let bodyReads = 0
+  const realOpen = globalThis.caches.open
+  globalThis.caches.open = async (...args) => {
+    const cache = await realOpen(...args)
+    return {
+      ...cache,
+      match: async (req) => {
+        const res = await cache.match(req)
+        if (!res) return res
+        return {
+          ...res,
+          clone: () => {
+            bodyReads++
+            return res.clone()
+          },
+        }
+      },
+    }
+  }
+
+  const { isModelCached } = await import('../src/lib/whisper.js')
+  assert.equal(await isModelCached('distil-small'), true)
+  assert.equal(bodyReads, 0, 'the hot-path check must not touch a single response body')
+  delete globalThis.caches
+})
+
+test('an unreadable cache does not stop transcription', async () => {
+  // Failing closed on a storage hiccup would park the whole backlog as
+  // "evicted" when the model is sitting right there. Not being able to prove a
+  // model is gone is not evidence that it is.
+  globalThis.caches = {
+    keys: async () => {
+      throw new Error('storage unavailable')
+    },
+  }
+  const { isModelCached } = await import('../src/lib/whisper.js')
+  assert.equal(await isModelCached('distil-small'), true)
   delete globalThis.caches
 })
 

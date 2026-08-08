@@ -790,6 +790,24 @@ export function StoreProvider({ children }) {
     )
   }, [ready, settings.whisperEnabled, patchNote, runTranscriptionQueue])
 
+  /**
+   * Kick the queue whenever a note is waiting.
+   *
+   * This was missing, and it is why captures sat forever: `addCapture` marked
+   * the note 'pending' and nothing told the queue. The only triggers were app
+   * launch, a manual retry, and finishing a download — so a note recorded
+   * during a session waited for the next cold start to be written up.
+   *
+   * Watching `notes` rather than calling from `addCapture` covers every route
+   * into 'pending' at once, including retry and unblock, and cannot be
+   * forgotten by a future caller. Re-entry is already handled: the queue
+   * returns immediately if it is running.
+   */
+  useEffect(() => {
+    if (!ready || !settings.whisperEnabled) return
+    if (notes.some((n) => n.transcribeState === 'pending')) runTranscriptionQueue()
+  }, [ready, settings.whisperEnabled, notes, runTranscriptionQueue])
+
   /* ------------------------------------------------------------ lifecycle */
 
   useEffect(() => {

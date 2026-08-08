@@ -638,6 +638,20 @@ function installFakeMedia({ failGetUserMedia = false } = {}) {
   return asked
 }
 
+/** Cache Storage stand-in, so the queue can be watched deciding it is evicted. */
+function installFakeModelCache(urls) {
+  const entries = new Set(urls)
+  globalThis.caches = {
+    keys: async () => ['transformers-cache'],
+    open: async () => ({
+      keys: async () => [...entries].map((url) => ({ url })),
+      match: async () => null,
+      delete: async (req) => entries.delete(req.url),
+    }),
+    delete: async () => true,
+  }
+}
+
 function uninstallFakeMedia() {
   Object.defineProperty(win.navigator, 'mediaDevices', { value: undefined, configurable: true })
   define('MediaRecorder', undefined)
@@ -710,6 +724,77 @@ test('a sweep combination that cannot open the recorder leaves no recogniser run
     uninstallFakeMedia()
     FakeSpeechRecognition.reset(10)
   }
+})
+
+test('a capture made during a session is picked up without a relaunch', async () => {
+  /**
+   * The round-5 regression, and the one that mattered: notes were marked
+   * 'pending' by addCapture and nothing ever told the queue. The only triggers
+   * were app launch, a manual retry, and finishing a download — so a recording
+   * made during a session waited for the next cold start to be written up. On
+   * device that read as "3 waiting, oldest 3 minutes ago", forever.
+   *
+   * Observed here through the eviction path: with no model in the cache the
+   * queue marks the note 'blocked'. Reaching 'blocked' at all proves the queue
+   * ran, and it ran without anything remounting.
+   */
+  const { useStore } = await import('../src/lib/store.jsx')
+  installFakeModelCache([])
+
+  const holder = document.createElement('div')
+  document.body.appendChild(holder)
+  const probeRoot = createRoot(holder)
+  let api = null
+  function Probe() {
+    api = useStore()
+    return null
+  }
+
+  await act(async () => {
+    probeRoot.render(
+      <RouterProvider>
+        <StoreProvider>
+          <Probe />
+        </StoreProvider>
+      </RouterProvider>
+    )
+  })
+  await flush(4)
+
+  await act(async () => {
+    await api.setSetting('whisperEnabled', true)
+  })
+
+  let note = null
+  await act(async () => {
+    note = await api.addCapture({ blob: new Blob(['x'.repeat(64)]), duration: 4000 })
+  })
+  assert.equal(note.transcribeState, 'pending', 'a capture with audio enters the queue')
+
+  // Wait for a settled state. 'running' is not one — it is the queue having
+  // started, which is most of what this test is about, but a note parked in
+  // 'running' forever is the very failure being guarded against.
+  const deadline = Date.now() + 8000
+  let seen = null
+  while (Date.now() < deadline) {
+    seen = api.notes.find((n) => n.id === note.id)?.transcribeState
+    if (seen === 'blocked' || seen === 'failed' || seen === 'done') break
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 25))
+    })
+  }
+  assert.equal(
+    seen,
+    'blocked',
+    `expected the queue to run and park the note as 'blocked'; it sat at '${seen}' instead ` +
+      `[ready=${api.ready} enabled=${api.settings.whisperEnabled}]`
+  )
+
+  await act(async () => {
+    probeRoot.unmount()
+  })
+  holder.remove()
+  delete globalThis.caches
 })
 
 test('nothing logged a console error the whole way through', () => {

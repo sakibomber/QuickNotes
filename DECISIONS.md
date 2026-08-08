@@ -414,6 +414,20 @@ Built because of §18, and shaped by it. A transcription feature shipped that co
 
 Constraints carried in from the audit: processed audio only (§11 — raw breaks the recording here, so nothing in setup may choose it), transcription after capture only, and the test clip is never written to the note store — it is not a note and must not become one just to be played back once.
 
+## 24. The queue stopped running — two defects, one shipped by me (2026-08-07)
+
+Reported from the device: recordings saved, entered the queue, and sat forever — *"3 waiting · oldest 3 min ago"* — while the wizard's gate 4 and the speed test both transcribed correctly. That split is the whole diagnosis: **both working paths pass `allowDownload: true` and skip the eviction check; the background queue is the only caller that runs it.**
+
+**1 · The eviction check was reading model weights into memory.** `isModelCached()` delegated to `modelCacheReport()`, which weighed every cached entry — and the weigher fell back to `res.clone().blob()` when a response carried no `content-length`. That reads up to 172 MB into memory, on the transcription hot path, before every queued note. It is almost certainly also the jank at first open, since the launch-resume effect calls the queue immediately. Now the check counts matching weight URLs and stops at two: presence only, never measurement, no response body opened at all. It also **fails open** — a cache it cannot read is not proof of eviction, and failing closed would park a whole backlog as evicted while the model sits right there.
+
+**2 · Nothing ever kicked the queue after a capture.** `addCapture` marked the note `pending` and returned. The only triggers were app launch, a manual retry, and finishing a download — so a note recorded during a session waited for the next cold start. This one is **older than round 5**; it was masked by the fact that most testing recorded and then relaunched. I cannot fully account for the 8/05 cold-start pass, and I am not going to invent a reason. Fixed by watching for waiting notes rather than calling from `addCapture`, which covers every route into `pending` — capture, retry, unblock — and cannot be forgotten by a future caller.
+
+> **The test that matters reproduces the device symptom exactly.** With the trigger removed it fails with *"it sat at 'pending' instead"*. That is the words off the phone, in CI.
+
+**A note also contradicted itself**, which was reported alongside and is real: the body read *"No words came through. Play the recording and type what it says"* while the status line under it read *"Waiting to be written up."* The give-up text rendered on any empty transcript regardless of queue state. It now only appears once the note is genuinely finished with.
+
+**Method note.** The first version of the hot-path test **passed against the bug**, because the fake cache always supplied `content-length` and the body-read fallback never fired. It only became a real test once the fake was made to omit the header — the condition the fallback exists for. Same lesson as §14: a regression test that has not been watched to fail is not evidence, and "watched to fail" means against the actual mechanism, not a nearby one.
+
 ## 7. Settled — do not relitigate
 
 - Swipe threshold (`0.24` ratio) and flick velocity — converged with the tested prototype
